@@ -5,9 +5,7 @@ import { ExternalLink, Edit3, Mail, Download, Clock } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
 import Modal from "@/components/Modal";
-import { api, Application, ApplicationStatus, ApplicationEvent } from "@/lib/api";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { api, Application, ApplicationStatus, ApplicationEvent, getApiBase } from "@/lib/api";
 
 const COLUMNS: { key: ApplicationStatus; label: string }[] = [
   { key: "saved", label: "Saved" },
@@ -139,7 +137,7 @@ function ApplicationsContent() {
 
   function exportCSV() {
     const token = typeof window !== "undefined" ? localStorage.getItem("jobtrack_token") : null;
-    fetch(`${API_BASE}/applications/export/csv`, {
+    fetch(`${getApiBase()}/applications/export/csv`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.blob())
