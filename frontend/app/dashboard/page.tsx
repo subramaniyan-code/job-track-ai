@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers } from "lucide-react";
+import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -125,6 +125,7 @@ function DashboardContent() {
   const [recent, setRecent] = useState<Application[]>([]);
   const [inbox, setInbox] = useState<EmailInsight[]>([]);
   const [trends, setTrends] = useState<PlatformTrendsOut | null>(null);
+  const [stale, setStale] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -133,12 +134,14 @@ function DashboardContent() {
       api.get<Application[]>("/applications"),
       api.get<EmailInsight[]>("/inbox?limit=10"),
       api.get<PlatformTrendsOut>("/dashboard/platform-trends"),
+      api.get<Application[]>("/applications/stale"),
     ])
-      .then(([s, apps, ins, tr]) => {
+      .then(([s, apps, ins, tr, st]) => {
         setStats(s);
         setRecent(apps.slice(0, 6));
         setInbox(ins);
         setTrends(tr);
+        setStale(st);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -180,6 +183,30 @@ function DashboardContent() {
             <StatCard label="Pending follow-ups" value={stats.pending_followups} icon={Clock} tone="amber" />
             <StatCard label="Inbox updates" value={stats.unread_inbox_insights} icon={Mail} tone={stats.unread_inbox_insights > 0 ? "brand" : "default"} />
           </div>
+
+          {stale.length > 0 && (
+            <div className="card p-4 border-amber-200 bg-amber-50">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle size={16} className="text-amber-600" />
+                <h2 className="font-semibold text-amber-800">⏰ Follow-up needed ({stale.length})</h2>
+              </div>
+              <p className="text-xs text-amber-700 mb-3">These applications have had no activity for 7+ days.</p>
+              <div className="space-y-2">
+                {stale.map((a) => {
+                  const days = Math.floor((Date.now() - new Date(a.last_activity_at).getTime()) / 86400000);
+                  return (
+                    <div key={a.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-amber-100">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{a.job.title}</p>
+                        <p className="text-xs text-slate-500">{a.job.company || "—"} · {days}d ago</p>
+                      </div>
+                      <Link href="/followups" className="text-xs text-brand-600 font-medium shrink-0 ml-2">Follow up →</Link>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="card p-5">
             <h2 className="font-semibold mb-4">Applications by outcome</h2>

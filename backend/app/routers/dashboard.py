@@ -41,6 +41,13 @@ def get_stats(db: Session = Depends(get_db), user: models.User = Depends(get_cur
         models.EmailInsight.is_read == False,  # noqa: E712
     ).count()
 
+    stale_cutoff = now - timedelta(days=7)
+    stale_count = db.query(models.Application).filter(
+        models.Application.user_id == user.id,
+        models.Application.status == models.ApplicationStatus.applied,
+        models.Application.last_activity_at < stale_cutoff,
+    ).count()
+
     return schemas.DashboardStats(
         total_applications=total,
         applied=applied,
@@ -53,6 +60,7 @@ def get_stats(db: Session = Depends(get_db), user: models.User = Depends(get_cur
         applications_last_7_days=last_7,
         applications_last_30_days=last_30,
         unread_inbox_insights=unread_inbox,
+        stale_applications=stale_count,
     )
 
 
