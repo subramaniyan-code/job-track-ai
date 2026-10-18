@@ -2,15 +2,20 @@
 Central configuration, loaded from environment variables (see .env.example
 at the project root). Nothing here should be hardcoded when you deploy.
 """
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Load settings directly from environment variables (GitHub secrets in CI).
+    # No .env file is required in production.
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     # --- Core ---
-    database_url: str = "postgresql://jobtrack:jobtrack@db:5432/jobtrack"
-    jwt_secret: str = "change-me-please-use-a-long-random-string"
+    # Database URL must be supplied via the DATABASE_URL secret; fallback for local development.
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://jobtrack:jobtrack@db:5432/jobtrack")
+    # JWT secret must be a strong random string supplied via JWT_SECRET secret; fallback for local development.
+    jwt_secret: str = os.getenv("JWT_SECRET", "change-me-please-use-a-long-random-string")
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
 
