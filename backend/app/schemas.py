@@ -109,6 +109,9 @@ class JobManualCreate(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None
     remote: bool = False
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    salary_currency: Optional[str] = "INR"
 
 
 # ---------- Jobs ----------
@@ -142,6 +145,7 @@ class ApplicationCreate(BaseModel):
     resume_version: Optional[str] = None
     notes: Optional[str] = None
     recruiter_email: Optional[str] = None
+    salary_expectation: Optional[str] = None
 
 
 class ApplicationUpdate(BaseModel):
@@ -150,6 +154,7 @@ class ApplicationUpdate(BaseModel):
     notes: Optional[str] = None
     fit_score: Optional[float] = None
     recruiter_email: Optional[str] = None
+    salary_expectation: Optional[str] = None
 
 
 class ApplicationOut(BaseModel):
@@ -159,6 +164,7 @@ class ApplicationOut(BaseModel):
     fit_score: Optional[float]
     recruiter_email: Optional[str]
     resume_version: Optional[str]
+    salary_expectation: Optional[str]
     notes: Optional[str]
     applied_at: Optional[datetime]
     last_activity_at: datetime
@@ -166,6 +172,20 @@ class ApplicationOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- Application timeline ----------
+class ApplicationEventOut(BaseModel):
+    id: str
+    event_type: str
+    from_status: Optional[str]
+    to_status: Optional[str]
+    note: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 
 
 # ---------- Follow-ups ----------
@@ -209,6 +229,7 @@ class DashboardStats(BaseModel):
     applications_last_7_days: int
     applications_last_30_days: int
     unread_inbox_insights: int
+    stale_applications: int = 0
 
 
 class PlatformTrend(BaseModel):

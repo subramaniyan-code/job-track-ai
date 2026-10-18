@@ -1,6 +1,9 @@
-from datetime import datetime
+import csv
+import io
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -33,11 +36,21 @@ def create_application(
         resume_version=payload.resume_version,
         notes=payload.notes,
         recruiter_email=payload.recruiter_email,
+        salary_expectation=payload.salary_expectation,
         applied_at=datetime.utcnow() if payload.status == models.ApplicationStatus.applied else None,
     )
     db.add(app_row)
     db.commit()
     db.refresh(app_row)
+
+    # Log creation event
+    db.add(models.ApplicationEvent(
+        application_id=app_row.id,
+        user_id=user.id,
+        event_type="created",
+        to_status=payload.status.value,
+    ))
+    db.commit()
     return app_row
 
 
@@ -51,6 +64,74 @@ def list_applications(
     if status_filter:
         query = query.filter(models.Application.status == status_filter)
     return query.order_by(models.Application.last_activity_at.desc()).all()
+
+
+@router.get("/export/csv")
+def export_csv(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    """Download all applications as a CSV file."""
+    apps = db.query(models.Application).filter(
+        models.Application.user_id == user.id
+    ).order_by(models.Application.created_at.desc()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Title", "Company", "Location", "Platform", "Status",
+        "Applied At", "Salary Expectation", "Recruiter Email",
+        "Resume Version", "Fit Score", "Notes", "Created At",
+    ])
+    for a in apps:
+        writer.writerow([
+            a.job.title,
+            a.job.company or "",
+            a.job.location or "",
+            a.job.platform or "",
+            a.status.value,
+            a.applied_at.isoformat() if a.applied_at else "",
+            a.salary_expectation or "",
+            a.recruiter_email or "",
+            a.resume_version or "",
+            a.fit_score if a.fit_score is not None else "",
+            a.notes or "",
+            a.created_at.isoformat(),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=applications.csv"},
+    )
+
+
+@router.get("/stale", response_model=list[schemas.ApplicationOut])
+def get_stale_applications(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Applications with status=applied and no activity for N days."""
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    return db.query(models.Application).filter(
+        models.Application.user_id == user.id,
+        models.Application.status == models.ApplicationStatus.applied,
+        models.Application.last_activity_at < cutoff,
+    ).order_by(models.Application.last_activity_at.asc()).limit(10).all()
+
+
+@router.get("/{application_id}/timeline", response_model=list[schemas.ApplicationEventOut])
+def get_timeline(
+    application_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    app_row = db.query(models.Application).filter(
+        models.Application.id == application_id, models.Application.user_id == user.id
+    ).first()
+    if not app_row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
+    return db.query(models.ApplicationEvent).filter(
+        models.ApplicationEvent.application_id == application_id
+    ).order_by(models.ApplicationEvent.created_at.asc()).all()
 
 
 @router.patch("/{application_id}", response_model=schemas.ApplicationOut)
@@ -67,11 +148,23 @@ def update_application(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Application not found")
 
     data = payload.model_dump(exclude_unset=True)
+    old_status = app_row.status
+
     if "status" in data:
-        app_row.status = data["status"]
-        if data["status"] == models.ApplicationStatus.applied and not app_row.applied_at:
+        new_status = data["status"]
+        app_row.status = new_status
+        if new_status == models.ApplicationStatus.applied and not app_row.applied_at:
             app_row.applied_at = datetime.utcnow()
-    for field in ("resume_version", "notes", "fit_score", "recruiter_email"):
+        if new_status != old_status:
+            db.add(models.ApplicationEvent(
+                application_id=app_row.id,
+                user_id=user.id,
+                event_type="status_change",
+                from_status=old_status.value,
+                to_status=new_status.value,
+            ))
+
+    for field in ("resume_version", "notes", "fit_score", "recruiter_email", "salary_expectation"):
         if field in data:
             setattr(app_row, field, data[field])
 
@@ -87,15 +180,6 @@ def get_apply_link(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """
-    Returns the direct apply URL for one-tap manual submission.
-
-    Design note: true unattended auto-apply against LinkedIn/Indeed's own
-    forms violates their Terms of Service and is a common cause of account
-    bans and recruiter blacklisting. This tool instead gets you to the
-    verified apply page in one tap, with your tailored resume/tracking
-    already prepared — the safe version of "auto apply".
-    """
     app_row = db.query(models.Application).filter(
         models.Application.id == application_id, models.Application.user_id == user.id
     ).first()

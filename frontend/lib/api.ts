@@ -101,6 +101,9 @@ export interface Job {
   platform: string | null;
   description: string | null;
   posted_at: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
 }
 
 export type ApplicationStatus = "saved" | "applied" | "interviewing" | "offer" | "rejected" | "ghosted";
@@ -112,9 +115,19 @@ export interface Application {
   fit_score: number | null;
   recruiter_email: string | null;
   resume_version: string | null;
+  salary_expectation: string | null;
   notes: string | null;
   applied_at: string | null;
   last_activity_at: string;
+  created_at: string;
+}
+
+export interface ApplicationEvent {
+  id: string;
+  event_type: string;
+  from_status: string | null;
+  to_status: string | null;
+  note: string | null;
   created_at: string;
 }
 
@@ -144,6 +157,7 @@ export interface DashboardStats {
   applications_last_7_days: number;
   applications_last_30_days: number;
   unread_inbox_insights: number;
+  stale_applications: number;
 }
 
 export interface EmailAccount {

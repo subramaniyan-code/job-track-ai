@@ -156,6 +156,9 @@ class Job(Base):
     posted_at = Column(DateTime, nullable=True)
     fetched_at = Column(DateTime, default=datetime.utcnow)
     raw = Column(JSON, nullable=True)
+    salary_min = Column(Float, nullable=True)
+    salary_max = Column(Float, nullable=True)
+    salary_currency = Column(String, default="INR", nullable=True)
 
 
 class Application(Base):
@@ -167,6 +170,7 @@ class Application(Base):
     status = Column(Enum(ApplicationStatus), default=ApplicationStatus.saved, nullable=False)
     fit_score = Column(Float, nullable=True)          # 0-100, from resume/JD matching
     recruiter_email = Column(String, nullable=True)   # who follow-up emails go to
+    salary_expectation = Column(String, nullable=True)
     resume_version = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     applied_at = Column(DateTime, nullable=True)
@@ -176,6 +180,7 @@ class Application(Base):
     user = relationship("User", back_populates="applications")
     job = relationship("Job")
     followups = relationship("FollowUp", back_populates="application", cascade="all, delete-orphan")
+    events = relationship("ApplicationEvent", back_populates="application", cascade="all, delete-orphan", order_by="ApplicationEvent.created_at")
 
 
 class FollowUp(Base):
@@ -193,3 +198,20 @@ class FollowUp(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     application = relationship("Application", back_populates="followups")
+
+
+class ApplicationEvent(Base):
+    """Audit log entry for an application — status changes, creation, notes, etc."""
+    __tablename__ = "application_events"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    application_id = Column(UUID(as_uuid=False), ForeignKey("applications.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    event_type = Column(String, nullable=False)   # e.g. 'created', 'status_change'
+    from_status = Column(String, nullable=True)
+    to_status = Column(String, nullable=True)
+    note = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    application = relationship("Application", back_populates="events")
+    user = relationship("User")

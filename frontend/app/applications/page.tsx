@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Edit3, Mail } from "lucide-react";
+import { ExternalLink, Edit3, Mail, Download, Clock } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
 import Modal from "@/components/Modal";
-import { api, Application, ApplicationStatus } from "@/lib/api";
+import { api, Application, ApplicationStatus, ApplicationEvent } from "@/lib/api";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const COLUMNS: { key: ApplicationStatus; label: string }[] = [
   { key: "saved", label: "Saved" },
@@ -16,10 +18,51 @@ const COLUMNS: { key: ApplicationStatus; label: string }[] = [
   { key: "ghosted", label: "Ghosted" },
 ];
 
+const STATUS_COLORS: Record<string, string> = {
+  created: "bg-blue-400",
+  status_change: "bg-brand-500",
+  note_added: "bg-amber-400",
+};
+
+function Timeline({ applicationId }: { applicationId: string }) {
+  const [events, setEvents] = useState<ApplicationEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get<ApplicationEvent[]>(`/applications/${applicationId}/timeline`)
+      .then(setEvents)
+      .finally(() => setLoading(false));
+  }, [applicationId]);
+
+  if (loading) return <p className="text-xs text-slate-400">Loading timeline…</p>;
+  if (events.length === 0) return <p className="text-xs text-slate-400">No events yet.</p>;
+
+  return (
+    <div className="space-y-2">
+      {events.map((e) => (
+        <div key={e.id} className="flex items-start gap-2">
+          <span className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${STATUS_COLORS[e.event_type] || "bg-slate-300"}`} />
+          <div className="min-w-0">
+            <p className="text-xs text-slate-700">
+              {e.event_type === "created" && `Created as ${e.to_status}`}
+              {e.event_type === "status_change" && `${e.from_status} → ${e.to_status}`}
+              {e.event_type === "note_added" && (e.note || "Note added")}
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {new Date(e.created_at).toLocaleString()}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () => void; onSaved: (a: Application) => void }) {
   const [recruiterEmail, setRecruiterEmail] = useState(app.recruiter_email || "");
   const [notes, setNotes] = useState(app.notes || "");
   const [resumeVersion, setResumeVersion] = useState(app.resume_version || "");
+  const [salaryExpectation, setSalaryExpectation] = useState(app.salary_expectation || "");
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -29,6 +72,7 @@ function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () =>
         recruiter_email: recruiterEmail || null,
         notes: notes || null,
         resume_version: resumeVersion || null,
+        salary_expectation: salaryExpectation || null,
       });
       onSaved(updated);
       onClose();
@@ -41,6 +85,10 @@ function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () =>
     <Modal title={app.job.title} onClose={onClose}>
       <div className="space-y-4">
         <div>
+          <label className="label">Salary expectation</label>
+          <input className="input" value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. ₹18 LPA" />
+        </div>
+        <div>
           <label className="label">Recruiter / contact email</label>
           <input className="input" value={recruiterEmail} onChange={(e) => setRecruiterEmail(e.target.value)} placeholder="recruiter@company.com" />
           <p className="text-xs text-slate-400 mt-1">Needed so follow-up emails know where to send.</p>
@@ -51,11 +99,19 @@ function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () =>
         </div>
         <div>
           <label className="label">Notes</label>
-          <textarea className="input" rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Interview notes, referral info, etc." />
+          <textarea className="input" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Interview notes, referral info, etc." />
         </div>
         <button onClick={save} disabled={saving} className="btn btn-primary w-full">
-          {saving ? "Saving\u2026" : "Save"}
+          {saving ? "Saving…" : "Save"}
         </button>
+
+        <div className="border-t border-[var(--border)] pt-4">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Clock size={13} className="text-slate-400" />
+            <p className="text-xs font-semibold text-slate-500">Timeline</p>
+          </div>
+          <Timeline applicationId={app.id} />
+        </div>
       </div>
     </Modal>
   );
@@ -81,15 +137,36 @@ function ApplicationsContent() {
     if (app.status === "saved") changeStatus(app, "applied");
   }
 
+  function exportCSV() {
+    const token = typeof window !== "undefined" ? localStorage.getItem("jobtrack_token") : null;
+    fetch(`${API_BASE}/applications/export/csv`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.blob())
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "applications.csv";
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Applications</h1>
-        <p className="text-sm text-slate-500">Track every stage, from saved to offer.</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Applications</h1>
+          <p className="text-sm text-slate-500">Track every stage, from saved to offer.</p>
+        </div>
+        <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 shrink-0">
+          <Download size={14} /> Export CSV
+        </button>
       </div>
 
       {loading ? (
-        <div className="text-sm text-slate-400">Loading\u2026</div>
+        <div className="text-sm text-slate-400">Loading…</div>
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 md:mx-0 md:px-0 snap-x">
           {COLUMNS.map((col) => {
@@ -104,9 +181,12 @@ function ApplicationsContent() {
                   {items.map((app) => (
                     <div key={app.id} className="card p-3">
                       <p className="text-sm font-semibold truncate">{app.job.title}</p>
-                      <p className="text-xs text-slate-500 truncate">{app.job.company || "\u2014"}</p>
+                      <p className="text-xs text-slate-500 truncate">{app.job.company || "—"}</p>
+                      {app.salary_expectation && (
+                        <p className="text-xs text-emerald-600 mt-1">💰 {app.salary_expectation}</p>
+                      )}
                       {app.fit_score != null && (
-                        <p className="text-xs text-brand-600 mt-1">Fit score: {app.fit_score}%</p>
+                        <p className="text-xs text-brand-600 mt-0.5">Fit: {app.fit_score}%</p>
                       )}
                       <div className="flex items-center gap-1.5 mt-2">
                         <select
