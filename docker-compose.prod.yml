@@ -28,5 +28,3 @@ services:
     ports: ["3100:3000"]
 volumes:
   jobtrack_pgdata:
-    external: true
-    name: jobtrack-ai_jobtrack_pgdata
