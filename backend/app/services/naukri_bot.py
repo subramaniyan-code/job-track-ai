@@ -104,29 +104,33 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
     valid_cookies = []
     for c in cookies_to_add:
         if isinstance(c, dict) and "name" in c and "value" in c:
+            domain_val = str(c.get("domain") or ".naukri.com")
+            if "naukri" not in domain_val:
+                continue
             clean_c = {
                 "name": str(c["name"]),
                 "value": str(c["value"]),
-                "domain": str(c.get("domain") or ".naukri.com"),
+                "domain": domain_val if domain_val.startswith(".") else f".{domain_val}",
                 "path": str(c.get("path") or "/"),
             }
-            if clean_c["domain"].startswith("http"):
-                clean_c["domain"] = ".naukri.com"
             valid_cookies.append(clean_c)
 
+    print(f"[NAUKRI_BOT] Found {len(valid_cookies)} sanitized Naukri session cookies for user {user_id}", flush=True)
+
     session_applied_count = 0
-    session_target = min(2, config.daily_max_applications - config.applications_today)  # conservative 1-2 per run
+    session_target = min(2, config.daily_max_applications - config.applications_today)
 
     # Prepare search terms
-    keywords = (config.target_keywords or "Software Engineer").split(",")[0].strip()
-    location = (config.target_locations or "Bengaluru").split(",")[0].strip()
+    keywords = (config.target_keywords or "Cloud & Infrastructure Engineer").split(",")[0].strip()
+    location = (config.target_locations or "Chennai").split(",")[0].strip()
 
     search_url = f"https://www.naukri.com/jobs-in-india?k={quote_plus(keywords)}&l={quote_plus(location)}"
+    print(f"[NAUKRI_BOT] Prepared search target: '{keywords}' in '{location}' -> {search_url}", flush=True)
 
     browser = None
     try:
         async with async_playwright() as p:
-            log.info("Launching stealth Chromium instance...")
+            print("[NAUKRI_BOT] Launching stealth Chromium instance inside Docker...", flush=True)
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -134,6 +138,9 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-infobars",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-zygote",
                     "--window-size=1920,1080",
                 ],
             )
@@ -147,25 +154,28 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             # Mask webdriver flag
             await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-            # Inject session cookies
-            if valid_cookies:
+            # Inject session cookies individually so invalid entries don't block the rest
+            added_count = 0
+            for c in valid_cookies:
                 try:
-                    await context.add_cookies(valid_cookies)
-                except Exception as e:
-                    log.warning("Could not add all cookies: %s", e)
+                    await context.add_cookies([c])
+                    added_count += 1
+                except Exception:
+                    pass
+            print(f"[NAUKRI_BOT] Injected {added_count}/{len(valid_cookies)} cookies into browser context", flush=True)
 
             page = await context.new_page()
 
             # Visit search page
-            log.info("Navigating to Naukri search: %s", search_url)
+            print(f"[NAUKRI_BOT] Navigating to Naukri search page: {search_url}", flush=True)
             await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
-            await _human_delay(4, 7)
+            await _human_delay(3, 6)
 
-            # Check if user is logged in
-            content = await page.content()
-            if "login" in page.url.lower() or "naukri.com/nlogin" in content:
-                msg = "Naukri session has expired or requires re-authentication. Please update cookies."
-                log.warning(msg)
+            # Check if redirected to login page
+            current_url = page.url.lower()
+            if "nlogin/login" in current_url:
+                msg = "Naukri session has expired or requires fresh cookies. Please re-enter session cookies."
+                print(f"[NAUKRI_BOT] {msg}", flush=True)
                 config.status = "session_expired"
                 config.status_message = msg
                 db.commit()
@@ -174,9 +184,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             await _smooth_scroll(page)
 
             # Find job cards on the search results page
-            # Naukri job tuples are typically under .srp-jobtuple-wrapper or article.jobTuple
-            job_cards = await page.query_selector_all(".srp-jobtuple-wrapper, article.jobTuple, div[class*='jobTuple']")
-            log.info("Found %d job cards on the search page", len(job_cards))
+            job_cards = await page.query_selector_all(
+                ".srp-jobtuple-wrapper, article.jobTuple, div[class*='jobTuple'], div[class*='srp-tuple'], [data-job-id]"
+            )
+            print(f"[NAUKRI_BOT] Found {len(job_cards)} job cards on search page", flush=True)
 
             if not job_cards:
                 # Try finding standard job link anchors
@@ -205,12 +216,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         models.Job.company == company,
                     ).first()
 
-                    if already_applied:
-                        log.info("Already tracked '%s' at '%s'. Skipping.", job_title, company)
-                        continue
-
                     # Open job details in a new page/tab or navigate
-                    log.info("Inspecting job %d: '%s' at '%s'", inspected_count, job_title, company)
+                    print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
                     detail_page = await context.new_page()
                     await detail_page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
                     await _human_delay(3, 6)
@@ -220,7 +227,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                     # 1. Check for "Already Applied"
                     if "already applied" in detail_content.lower():
-                        log.info("Job '%s' already applied on Naukri.", job_title)
+                        print(f"[NAUKRI_BOT] Job '{job_title}' at '{company}' was already applied. Skipping.", flush=True)
                         await detail_page.close()
                         continue
 
@@ -236,7 +243,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             break
 
                     if company_site_btn or has_redirect_text:
-                        log.info("Job '%s' at '%s' redirects to company site. Skipping.", job_title, company)
+                        print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal. Skipping.", flush=True)
                         db.add(models.NaukriBotLog(
                             user_id=user_id,
                             job_title=job_title,
@@ -248,18 +255,18 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         ))
                         db.commit()
                         await detail_page.close()
-                        await _human_delay(3, 6)
+                        await _human_delay(2, 4)
                         continue
 
                     # 3. Look for direct apply button
                     apply_btn = await detail_page.query_selector("#apply-button, button.apply-button, button:has-text('Apply')")
                     if not apply_btn:
-                        log.info("No direct apply button found for '%s'. Skipping.", job_title)
+                        print(f"[NAUKRI_BOT] No direct apply button found for '{job_title}'. Skipping.", flush=True)
                         await detail_page.close()
                         continue
 
                     # Click Apply
-                    log.info("Clicking direct apply for '%s' at '%s'...", job_title, company)
+                    print(f"[NAUKRI_BOT] Direct apply button found! Clicking Apply for '{job_title}' at '{company}'...", flush=True)
                     await apply_btn.click()
                     await _human_delay(3, 5)
 
@@ -269,7 +276,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']:visible"
                     )
                     if modal_questions and len(modal_questions) > 1:
-                        log.info("Job '%s' at '%s' has screening questionnaire questions. Skipping.", job_title, company)
+                        print(f"[NAUKRI_BOT] Job '{job_title}' has questionnaire questions. Skipping safely.", flush=True)
                         # Try to close modal
                         close_btn = await detail_page.query_selector("button.crossIcon, [class*='close'], .icon-close")
                         if close_btn:
@@ -285,7 +292,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         ))
                         db.commit()
                         await detail_page.close()
-                        await _human_delay(3, 6)
+                        await _human_delay(2, 4)
                         continue
 
                     # 5. Success verification
@@ -297,7 +304,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     )
 
                     if applied_success:
-                        log.info("Successfully direct-applied to '%s' at '%s'!", job_title, company)
+                        print(f"[NAUKRI_BOT] SUCCESS: Successfully 1-click direct applied to '{job_title}' at '{company}'!", flush=True)
                         session_applied_count += 1
                         config.applications_today += 1
 
@@ -349,7 +356,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     await _human_delay(8, 16)  # Human reading pause between applications
 
                 except Exception as card_err:
-                    log.error("Error inspecting card: %s", card_err)
+                    print(f"[NAUKRI_BOT] Error inspecting card #{inspected_count}: {card_err}", flush=True)
                     continue
 
             # Update final session state
@@ -360,6 +367,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 f"Today total: {config.applications_today}/{config.daily_max_applications}."
             )
             db.commit()
+            print(f"[NAUKRI_BOT] {config.status_message}", flush=True)
 
             return {
                 "status": "success",
@@ -369,7 +377,9 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             }
 
     except Exception as e:
-        log.error("Naukri bot session encountered error: %s", e, exc_info=True)
+        print(f"[NAUKRI_BOT] Session encountered exception: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         config.status = "error"
         config.status_message = f"Error during session: {str(e)[:200]}"
         db.commit()
@@ -377,4 +387,4 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
     finally:
         if browser:
             await browser.close()
-            log.info("Playwright browser closed. Memory freed.")
+            print("[NAUKRI_BOT] Playwright Chromium browser closed. Memory freed.", flush=True)

@@ -122,11 +122,17 @@ async def trigger_naukri_run_now(
 
     # Run in background task to avoid blocking the HTTP request
     async def _run_job():
+        print(f"[NAUKRI_BOT] Initiating background session for user {user.id}...", flush=True)
         job_db = SessionLocal()
         try:
             bot_cfg = job_db.query(models.NaukriBotConfig).filter(models.NaukriBotConfig.id == cfg.id).first()
             if bot_cfg:
-                await run_naukri_auto_apply_session(job_db, bot_cfg)
+                res = await run_naukri_auto_apply_session(job_db, bot_cfg)
+                print(f"[NAUKRI_BOT] Background session finished: {res}", flush=True)
+        except Exception as err:
+            print(f"[NAUKRI_BOT] Critical error in background worker: {err}", flush=True)
+            import traceback
+            traceback.print_exc()
         finally:
             job_db.close()
 
