@@ -233,8 +233,10 @@ class CandidateProfile(Base):
     preferred_locations = Column(JSON, nullable=True)   # list of strings: ["Bengaluru", "Hyderabad", "Remote"]
     naukri_search_queries = Column(JSON, nullable=True) # list of strings: search queries for Naukri
     summary = Column(Text, nullable=True)
-    raw_resume_text = Column(Text, nullable=True)
     resume_filename = Column(String, nullable=True)
+    google_ai_api_key_encrypted = Column(Text, nullable=True)  # Optional per-user Gemini API key
+    parser_source = Column(String, default="heuristic")        # 'gemini' or 'heuristic'
+    parser_message = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User")

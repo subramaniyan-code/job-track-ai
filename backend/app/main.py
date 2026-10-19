@@ -20,6 +20,9 @@ def run_migrations():
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency VARCHAR DEFAULT 'INR';"))
+            conn.execute(text("ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS google_ai_api_key_encrypted TEXT;"))
+            conn.execute(text("ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS parser_source VARCHAR DEFAULT 'heuristic';"))
+            conn.execute(text("ALTER TABLE candidate_profiles ADD COLUMN IF NOT EXISTS parser_message TEXT;"))
     except Exception:
         pass
 

@@ -260,6 +260,9 @@ class CandidateProfileOut(BaseModel):
     naukri_search_queries: Optional[list[str]] = None
     summary: Optional[str] = None
     resume_filename: Optional[str] = None
+    has_gemini_key: bool = False
+    parser_source: Optional[str] = "heuristic"
+    parser_message: Optional[str] = None
     updated_at: datetime
 
     class Config:
@@ -276,6 +279,7 @@ class CandidateProfileUpdate(BaseModel):
     preferred_locations: Optional[list[str]] = None
     naukri_search_queries: Optional[list[str]] = None
     summary: Optional[str] = None
+    google_ai_api_key: Optional[str] = None
 
 
 # ---------- Naukri Auto-Bot ----------

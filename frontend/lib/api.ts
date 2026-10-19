@@ -275,6 +275,9 @@ export interface CandidateProfile {
   naukri_search_queries: string[] | null;
   summary: string | null;
   resume_filename: string | null;
+  has_gemini_key?: boolean;
+  parser_source?: string | null;
+  parser_message?: string | null;
   updated_at: string;
 }
 
