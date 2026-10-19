@@ -1,3 +1,5 @@
+name: jobtrack-ai
+
 services:
   db:
     image: postgres:16-alpine
