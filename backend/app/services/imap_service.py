@@ -12,6 +12,7 @@ Deliberately conservative for a small (~1GB RAM) server:
 import email
 import imaplib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.header import decode_header
