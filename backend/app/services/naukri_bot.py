@@ -15,9 +15,9 @@ from ..security import decrypt_str
 log = logging.getLogger("naukri_bot")
 
 DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/128.0.0.0 Safari/537.36"
+    "Chrome/130.0.0.0 Safari/537.36"
 )
 
 
@@ -113,7 +113,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 "value": str(c["value"]),
                 "domain": clean_domain,
                 "path": str(c.get("path") or "/"),
+                "secure": bool(c.get("secure", True)),
+                "httpOnly": bool(c.get("httpOnly", False)),
             }
+            if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
+                clean_c["sameSite"] = c["sameSite"]
             valid_cookies.append(clean_c)
 
     print(f"[NAUKRI_BOT] Found {len(valid_cookies)} sanitized Naukri session cookies for user {user_id}", flush=True)
@@ -152,14 +156,27 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
                 timezone_id="Asia/Kolkata",
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Sec-Ch-Ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Linux"',
+                    "Upgrade-Insecure-Requests": "1",
+                },
             )
 
-            # Mask webdriver flag and spoof browser properties
+            # Mask webdriver cleanly without corrupting native browser prototypes
             await context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-                window.chrome = { runtime: {} };
+                if (!window.chrome) {
+                    window.chrome = {};
+                }
+                if (!window.chrome.csi) {
+                    window.chrome.csi = function() {};
+                }
+                if (!window.chrome.loadTimes) {
+                    window.chrome.loadTimes = function() {};
+                }
             """)
 
             # Inject session cookies individually so invalid entries don't block the rest
@@ -174,6 +191,16 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
             page = await context.new_page()
 
+            # Warm up session on homepage so Akamai validates the browser before searching
+            print("[NAUKRI_BOT] Warming up session at https://www.naukri.com...", flush=True)
+            try:
+                await page.goto("https://www.naukri.com", wait_until="domcontentloaded", timeout=30000)
+                await _human_delay(2, 4)
+                warmup_title = await page.title()
+                print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}'", flush=True)
+            except Exception as e:
+                print(f"[NAUKRI_BOT] Homepage warmup note: {e}", flush=True)
+
             # Discover job listings across configured target roles
             job_cards = []
             active_target_role = raw_targets[0]
@@ -186,12 +213,13 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 clean_kw = re.sub(r'\s+', ' ', clean_kw)
                 slug_kw = re.sub(r'[\s_]+', '-', clean_kw.lower())
 
-                candidate_urls = []
+                candidate_urls = [
+                    f"https://www.naukri.com/jobs-in-india?k={quote_plus(clean_kw)}&l={quote_plus(primary_loc)}",
+                    f"https://www.naukri.com/jobs-in-india?k={quote_plus(clean_kw)}",
+                ]
                 if loc_slug and loc_slug != "remote":
                     candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs-in-{loc_slug}")
                     candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs?k={quote_plus(clean_kw)}&l={quote_plus(primary_loc)}")
-                candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs")
-                candidate_urls.append(f"https://www.naukri.com/jobs-in-india?k={quote_plus(clean_kw)}&l={quote_plus(primary_loc)}")
 
                 for search_url in candidate_urls:
                     print(f"[NAUKRI_BOT] Trying search target: '{clean_kw}' in '{primary_loc}' -> {search_url}", flush=True)
