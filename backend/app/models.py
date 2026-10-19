@@ -216,3 +216,68 @@ class ApplicationEvent(Base):
 
     application = relationship("Application", back_populates="events")
     user = relationship("User")
+
+
+class CandidateProfile(Base):
+    """Parsed resume information and career search preferences."""
+    __tablename__ = "candidate_profiles"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), unique=True, nullable=False)
+    full_name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    primary_roles = Column(JSON, nullable=True)         # list of strings: ["Full Stack Developer", "Backend Engineer"]
+    skills = Column(JSON, nullable=True)                # list of strings: ["Python", "FastAPI", "React", "Docker"]
+    experience_years = Column(Float, default=0.0)
+    preferred_locations = Column(JSON, nullable=True)   # list of strings: ["Bengaluru", "Hyderabad", "Remote"]
+    naukri_search_queries = Column(JSON, nullable=True) # list of strings: search queries for Naukri
+    summary = Column(Text, nullable=True)
+    raw_resume_text = Column(Text, nullable=True)
+    resume_filename = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class NaukriBotConfig(Base):
+    """Configuration and state for the autonomous stealth Naukri auto-apply worker."""
+    __tablename__ = "naukri_bot_configs"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), unique=True, nullable=False)
+    enabled = Column(Boolean, default=False)
+    session_cookies_encrypted = Column(Text, nullable=True)   # JSON string of cookies, encrypted with Fernet
+    daily_max_applications = Column(Integer, default=5)       # Strict safety cap per day (5-8 recommended)
+    runs_per_day = Column(Integer, default=3)                 # Number of random sessions per day (2-4)
+    target_keywords = Column(String, nullable=True)           # e.g. "Python Developer, FastAPI"
+    target_locations = Column(String, nullable=True)          # e.g. "Bengaluru, Remote"
+    experience_years = Column(Integer, default=0)
+    applications_today = Column(Integer, default=0)
+    last_reset_date = Column(String, nullable=True)           # "YYYY-MM-DD"
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+    status = Column(String, default="idle")                   # idle, running, session_expired, error
+    status_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class NaukriBotLog(Base):
+    """Audit log entry for Naukri auto-bot actions."""
+    __tablename__ = "naukri_bot_logs"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    job_title = Column(String, nullable=False)
+    company = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    action = Column(String, nullable=False)   # 'applied', 'skipped_redirect', 'skipped_questions', 'failed'
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+

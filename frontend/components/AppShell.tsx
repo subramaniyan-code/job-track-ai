@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Search, ListChecks, Mail, Settings, LogOut, ShieldCheck,
+  LayoutDashboard, Search, ListChecks, Mail, Settings, LogOut, ShieldCheck, Zap,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/jobs", label: "Find Jobs", icon: Search },
   { href: "/applications", label: "Applications", icon: ListChecks },
+  { href: "/auto-apply", label: "Auto-Apply", icon: Zap },
   { href: "/followups", label: "Follow-ups", icon: Mail },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

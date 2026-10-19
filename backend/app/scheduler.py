@@ -271,6 +271,58 @@ async def poll_all_inboxes():
         db.close()
 
 
+async def poll_naukri_bots():
+    """
+    Checks if any enabled Naukri bots are due for a scheduled session.
+    Runs periodically (every 30 min), evaluates human hours (09:00 - 20:00 IST),
+    and executes randomized sessions if due.
+    """
+    from .services.naukri_bot import run_naukri_auto_apply_session
+
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        # Indian Standard Time (UTC + 5:30) check: only run between 9:00 AM and 8:00 PM IST (3:30 to 14:30 UTC)
+        hour_utc = now.hour + now.minute / 60.0
+        is_ist_daytime = 3.5 <= hour_utc <= 14.5
+
+        if not is_ist_daytime:
+            return
+
+        configs = db.query(models.NaukriBotConfig).filter(
+            models.NaukriBotConfig.enabled == True,
+            models.NaukriBotConfig.session_cookies_encrypted != None,
+        ).all()
+
+        for cfg in configs:
+            if cfg.status == "running":
+                continue
+
+            today_str = now.strftime("%Y-%m-%d")
+            if cfg.last_reset_date != today_str:
+                cfg.applications_today = 0
+                cfg.last_reset_date = today_str
+                db.commit()
+
+            if cfg.applications_today >= cfg.daily_max_applications:
+                continue
+
+            # Minimum spacing between sessions based on user's runs_per_day
+            min_interval_seconds = max(7200, int((10 * 3600) / max(1, cfg.runs_per_day)))
+            if cfg.last_run_at:
+                elapsed = (now - cfg.last_run_at).total_seconds()
+                if elapsed < min_interval_seconds:
+                    continue
+
+            try:
+                await run_naukri_auto_apply_session(db, cfg)
+            except Exception:
+                log.exception("Naukri bot session failed for user %s", cfg.user_id)
+                db.rollback()
+    finally:
+        db.close()
+
+
 def start_scheduler():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(dispatch_due_followups, "interval", minutes=5, id="dispatch_due_followups")
@@ -281,5 +333,13 @@ def start_scheduler():
         max_instances=1,  # never let two polls overlap on a small server
         coalesce=True,    # if a run was missed, don't queue up back-to-back catch-ups
     )
+    scheduler.add_job(
+        poll_naukri_bots, "interval",
+        minutes=30,
+        id="poll_naukri_bots",
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     return scheduler
+

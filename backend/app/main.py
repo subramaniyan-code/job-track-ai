@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine
 from .config import settings
 from .scheduler import start_scheduler
-from .routers import auth, connectors, jobs, applications, followups, dashboard, email_account, admin, inbox
+from .routers import auth, connectors, jobs, applications, followups, dashboard, email_account, admin, inbox, profile, naukri_bot
 
 
 def run_migrations():
@@ -60,6 +60,8 @@ app.include_router(dashboard.router)
 app.include_router(email_account.router)
 app.include_router(admin.router)
 app.include_router(inbox.router)
+app.include_router(profile.router)
+app.include_router(naukri_bot.router)
 
 
 @app.get("/health")

@@ -245,3 +245,83 @@ class PlatformTrend(BaseModel):
 class PlatformTrendsOut(BaseModel):
     platforms: list[PlatformTrend]
     summary: str  # one computed sentence, e.g. "Naukri has your highest reply rate (40%) across 10 applications."
+
+
+# ---------- Candidate Profile & Resume ----------
+class CandidateProfileOut(BaseModel):
+    id: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    primary_roles: Optional[list[str]] = None
+    skills: Optional[list[str]] = None
+    experience_years: float = 0.0
+    preferred_locations: Optional[list[str]] = None
+    naukri_search_queries: Optional[list[str]] = None
+    summary: Optional[str] = None
+    resume_filename: Optional[str] = None
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CandidateProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    primary_roles: Optional[list[str]] = None
+    skills: Optional[list[str]] = None
+    experience_years: Optional[float] = None
+    preferred_locations: Optional[list[str]] = None
+    naukri_search_queries: Optional[list[str]] = None
+    summary: Optional[str] = None
+
+
+# ---------- Naukri Auto-Bot ----------
+class NaukriBotConfigOut(BaseModel):
+    id: str
+    enabled: bool
+    has_session: bool
+    daily_max_applications: int
+    runs_per_day: int
+    target_keywords: Optional[str]
+    target_locations: Optional[str]
+    experience_years: int
+    applications_today: int
+    last_run_at: Optional[datetime]
+    next_run_at: Optional[datetime]
+    status: str
+    status_message: Optional[str]
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NaukriBotConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    daily_max_applications: Optional[int] = None
+    runs_per_day: Optional[int] = None
+    target_keywords: Optional[str] = None
+    target_locations: Optional[str] = None
+    experience_years: Optional[int] = None
+
+
+class NaukriSessionPayload(BaseModel):
+    cookies_json: str  # JSON exported from browser or storageState
+
+
+class NaukriBotLogOut(BaseModel):
+    id: str
+    job_title: str
+    company: Optional[str]
+    location: Optional[str]
+    url: Optional[str]
+    action: str
+    notes: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+

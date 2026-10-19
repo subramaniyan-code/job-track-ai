@@ -32,8 +32,10 @@ class ApiError extends Error {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const isUrlEncoded = typeof URLSearchParams !== "undefined" && options.body instanceof URLSearchParams;
   const headers: Record<string, string> = {
-    ...(options.body && !(options.body instanceof URLSearchParams) ? { "Content-Type": "application/json" } : {}),
+    ...(options.body && !isUrlEncoded && !isFormData ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
@@ -59,10 +61,44 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   get: <T>(path: string) => request<T>(path, { method: "GET" }),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
-  put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
+  post: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "POST",
+      body:
+        typeof FormData !== "undefined" && body instanceof FormData
+          ? body
+          : typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams
+          ? body
+          : body !== undefined
+          ? JSON.stringify(body)
+          : undefined,
+    }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PATCH",
+      body:
+        typeof FormData !== "undefined" && body instanceof FormData
+          ? body
+          : typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams
+          ? body
+          : body !== undefined
+          ? JSON.stringify(body)
+          : undefined,
+    }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PUT",
+      body:
+        typeof FormData !== "undefined" && body instanceof FormData
+          ? body
+          : typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams
+          ? body
+          : body !== undefined
+          ? JSON.stringify(body)
+          : undefined,
+    }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  upload: <T>(path: string, formData: FormData) => request<T>(path, { method: "POST", body: formData }),
 };
 
 export async function login(email: string, password: string) {
@@ -226,3 +262,47 @@ export interface PlatformTrendsOut {
   platforms: PlatformTrend[];
   summary: string;
 }
+
+export interface CandidateProfile {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  primary_roles: string[] | null;
+  skills: string[] | null;
+  experience_years: number;
+  preferred_locations: string[] | null;
+  naukri_search_queries: string[] | null;
+  summary: string | null;
+  resume_filename: string | null;
+  updated_at: string;
+}
+
+export interface NaukriBotConfig {
+  id: string;
+  enabled: boolean;
+  has_session: boolean;
+  daily_max_applications: number;
+  runs_per_day: number;
+  target_keywords: string | null;
+  target_locations: string | null;
+  experience_years: number;
+  applications_today: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  status: string;
+  status_message: string | null;
+  updated_at: string;
+}
+
+export interface NaukriBotLog {
+  id: string;
+  job_title: string;
+  company: string | null;
+  location: string | null;
+  url: string | null;
+  action: string;
+  notes: string | null;
+  created_at: string;
+}
+
