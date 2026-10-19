@@ -104,12 +104,19 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
     valid_cookies = []
     for c in cookies_to_add:
         if isinstance(c, dict) and "name" in c and "value" in c:
+            c_name = str(c["name"]).strip()
+            # CRITICAL: Exclude stale Akamai/Cloudflare bot-telemetry cookies!
+            # Akamai generates fresh _abck / bm_* cookies bound to this server's specific IP and TLS profile.
+            # Injecting an _abck cookie exported from another machine/IP triggers an instant Akamai Access Denied block.
+            if c_name in ["_abck", "bm_sz", "bm_sv", "bm_mi", "ak_bmsc", "ak_bmsc_s"]:
+                continue
+
             domain_val = str(c.get("domain") or ".naukri.com").strip()
             if "naukri" not in domain_val:
                 continue
             clean_domain = ".naukri.com" if domain_val.endswith("naukri.com") else (domain_val if domain_val.startswith(".") else f".{domain_val}")
             clean_c = {
-                "name": str(c["name"]),
+                "name": c_name,
                 "value": str(c["value"]),
                 "domain": clean_domain,
                 "path": str(c.get("path") or "/"),
@@ -141,6 +148,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
+                    "--headless=new",
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
