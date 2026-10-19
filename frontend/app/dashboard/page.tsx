@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers, AlertTriangle } from "lucide-react";
+import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers, AlertTriangle, RefreshCw } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -127,6 +127,7 @@ function DashboardContent() {
   const [trends, setTrends] = useState<PlatformTrendsOut | null>(null);
   const [stale, setStale] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -145,6 +146,23 @@ function DashboardContent() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  async function syncInbox() {
+    setSyncing(true);
+    try {
+      await api.post("/inbox/sync");
+      const [newInbox, newStats] = await Promise.all([
+        api.get<EmailInsight[]>("/inbox?limit=10"),
+        api.get<DashboardStats>("/dashboard/stats"),
+      ]);
+      setInbox(newInbox);
+      setStats(newStats);
+    } catch (err: any) {
+      alert(err.message || "Failed to check inbox. Make sure your email account with IMAP is connected in Settings.");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function markRead(id: string) {
     await api.post(`/inbox/${id}/mark-read`);
@@ -226,9 +244,20 @@ function DashboardContent() {
           {trends && <PlatformTrendsCard trends={trends} />}
 
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Sparkles size={16} className="text-brand-600" />
-              <h2 className="font-semibold">Inbox activity</h2>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-brand-600" />
+                <h2 className="font-semibold">Inbox activity</h2>
+              </div>
+              <button
+                onClick={syncInbox}
+                disabled={syncing}
+                className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                title="Scan last 30 days of job emails from inbox"
+              >
+                <RefreshCw size={13} className={syncing ? "animate-spin" : ""} />
+                {syncing ? "Scanning inbox…" : "Sync inbox now"}
+              </button>
             </div>
             {inbox.length === 0 ? (
               <div className="card p-5 text-sm text-slate-400">
