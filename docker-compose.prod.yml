@@ -13,7 +13,7 @@ services:
       interval: 5s
       retries: 10
   backend:
-    image: ghcr.io/${OWNER}/jobtrack-backend:${TAG}
+    image: ghcr.io/${OWNER:-subramaniyan-code}/jobtrack-backend:${TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -22,7 +22,7 @@ services:
       db: { condition: service_healthy }
     ports: ["8000:8000"]
   frontend:
-    image: ghcr.io/${OWNER}/jobtrack-frontend:${TAG}
+    image: ghcr.io/${OWNER:-subramaniyan-code}/jobtrack-frontend:${TAG:-latest}
     restart: unless-stopped
     depends_on: [backend]
     ports: ["3100:3000"]
