@@ -9,9 +9,22 @@ from .scheduler import start_scheduler
 from .routers import auth, connectors, jobs, applications, followups, dashboard, email_account, admin, inbox
 
 
+def run_migrations():
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS salary_expectation VARCHAR;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min FLOAT;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max FLOAT;"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency VARCHAR DEFAULT 'INR';"))
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    run_migrations()
     scheduler = start_scheduler()
     yield
     scheduler.shutdown()

@@ -42,7 +42,13 @@ def _fernet() -> Fernet:
             "  python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"\n"
             "and put it in your .env file."
         )
-    return Fernet(key.encode())
+    try:
+        return Fernet(key.encode())
+    except Exception:
+        import base64
+        import hashlib
+        derived = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+        return Fernet(derived)
 
 
 def encrypt_dict(data: dict) -> str:
