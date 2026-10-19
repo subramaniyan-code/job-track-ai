@@ -21,6 +21,8 @@ Classify it and extract structured info. Respond with ONLY a JSON object (no mar
   "type": "application_confirmation" | "interview_invite" | "rejection" | "offer" | "job_alert" | "other",
   "company": "<company name or null>",
   "job_title": "<job title this email is about, or null>",
+  "recruiter_email": "<direct recruiter / HR email if found in signature or text, else null>",
+  "recruiter_phone": "<recruiter or hiring phone / mobile / WhatsApp number if found in signature or text, else null>",
   "summary": "<one short plain-sentence summary for a dashboard, max 20 words>",
   "extracted_jobs": [{{"title": "...", "company": "...", "url": "..."}}]
 }}
@@ -30,6 +32,7 @@ Rules:
 - For all other types, "extracted_jobs" should be an empty array.
 - If this email isn't actually job-search related at all, use type "other" and leave company/job_title null and extracted_jobs empty.
 - Never invent a URL — only include one if it's actually present in the email text.
+- If a recruiter signature mentions their direct contact email or phone number, extract it cleanly.
 
 Email from: {from_address}
 Email subject: {subject}
@@ -43,6 +46,8 @@ class EmailClassification:
     type: str = "other"
     company: Optional[str] = None
     job_title: Optional[str] = None
+    recruiter_email: Optional[str] = None
+    recruiter_phone: Optional[str] = None
     summary: Optional[str] = None
     extracted_jobs: list[dict] = field(default_factory=list)
 
@@ -90,12 +95,31 @@ def _heuristic_classify(from_address: str, subject: str, body: str) -> EmailClas
     if m_title:
         job_title = m_title.group(1).strip()
 
+    # Recruiter contact extraction
+    recruiter_email = None
+    m_email = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", body)
+    if m_email:
+        found_em = m_email.group(0).lower()
+        if not any(x in found_em for x in ["noreply", "no-reply", "notification", "alert", "mailer", "donotreply", "support"]):
+            recruiter_email = found_em
+    if not recruiter_email and "@" in from_address:
+        if not any(x in from_lower for x in ["noreply", "no-reply", "notification", "alert", "mailer", "donotreply"]):
+            m_from = re.search(r"<([^>]+)>", from_address)
+            recruiter_email = m_from.group(1).strip() if m_from else from_address.strip()
+
+    recruiter_phone = None
+    m_phone = re.search(r"(?:(?:\+91|91|0)?[ -]?)?([6-9]\d{9}|\b\d{3}[- ]?\d{3}[- ]?\d{4}\b)", body)
+    if m_phone:
+        recruiter_phone = m_phone.group(0).strip()
+
     summary = (subject[:80] + "...") if len(subject) > 80 else (subject or "Job application update")
 
     return EmailClassification(
         type=etype,
         company=company,
         job_title=job_title,
+        recruiter_email=recruiter_email,
+        recruiter_phone=recruiter_phone,
         summary=summary,
         extracted_jobs=[],
     )
@@ -129,9 +153,11 @@ async def classify_email(from_address: str, subject: str, body: str) -> Optional
             type=parsed.get("type", "other"),
             company=parsed.get("company"),
             job_title=parsed.get("job_title"),
+            recruiter_email=parsed.get("recruiter_email"),
+            recruiter_phone=parsed.get("recruiter_phone"),
             summary=parsed.get("summary"),
             extracted_jobs=parsed.get("extracted_jobs") or [],
         )
     except Exception:
-        # Fall back gracefully to heuristic classification rather than dropping the email
         return _heuristic_classify(from_address, subject, body)
+

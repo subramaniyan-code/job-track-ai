@@ -126,6 +126,7 @@ export interface Application {
   status: ApplicationStatus;
   fit_score: number | null;
   recruiter_email: string | null;
+  recruiter_phone: string | null;
   resume_version: string | null;
   salary_expectation: string | null;
   notes: string | null;

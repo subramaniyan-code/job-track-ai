@@ -170,6 +170,7 @@ class Application(Base):
     status = Column(Enum(ApplicationStatus), default=ApplicationStatus.saved, nullable=False)
     fit_score = Column(Float, nullable=True)          # 0-100, from resume/JD matching
     recruiter_email = Column(String, nullable=True)   # who follow-up emails go to
+    recruiter_phone = Column(String, nullable=True)   # recruiter contact phone / WhatsApp
     salary_expectation = Column(String, nullable=True)
     resume_version = Column(String, nullable=True)
     notes = Column(Text, nullable=True)

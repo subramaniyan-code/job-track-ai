@@ -71,8 +71,10 @@ def _auto_track_or_update_application(
     subject: str,
     body: str,
     received_at: datetime | None,
+    recruiter_email: str | None = None,
+    recruiter_phone: str | None = None,
 ) -> models.Application | None:
-    """Creates a new tracked application if one doesn't exist, or advances status."""
+    """Creates a new tracked application if one doesn't exist, or advances status and saves recruiter contact."""
     if classification_type not in ["application_confirmation", "interview_invite", "offer", "rejection"]:
         return None
 
@@ -110,6 +112,8 @@ def _auto_track_or_update_application(
             user_id=user_id,
             job_id=job.id,
             status=target_status,
+            recruiter_email=recruiter_email,
+            recruiter_phone=recruiter_phone,
             applied_at=received_time,
             last_activity_at=received_time,
             notes=f"Auto-tracked from email: {subject}",
@@ -125,6 +129,12 @@ def _auto_track_or_update_application(
             note=f"Imported from {classification_type} email: {subject[:100]}",
         ))
     else:
+        # Store recruiter contact details if newly found
+        if recruiter_email and not matched_app.recruiter_email:
+            matched_app.recruiter_email = recruiter_email
+        if recruiter_phone and not matched_app.recruiter_phone:
+            matched_app.recruiter_phone = recruiter_phone
+
         # Advance status
         if classification_type == "application_confirmation":
             if matched_app.status == models.ApplicationStatus.saved:
@@ -211,6 +221,8 @@ async def poll_one_account(db, account: models.EmailAccount, force_backfill: boo
             subject=msg.subject,
             body=msg.body,
             received_at=msg.received_at,
+            recruiter_email=classification.recruiter_email,
+            recruiter_phone=classification.recruiter_phone,
         )
 
         insight = models.EmailInsight(

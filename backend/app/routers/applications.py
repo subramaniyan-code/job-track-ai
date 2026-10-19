@@ -77,7 +77,7 @@ def export_csv(db: Session = Depends(get_db), user: models.User = Depends(get_cu
     writer = csv.writer(output)
     writer.writerow([
         "Title", "Company", "Location", "Platform", "Status",
-        "Applied At", "Salary Expectation", "Recruiter Email",
+        "Applied At", "Salary Expectation", "Recruiter Email", "Recruiter Phone",
         "Resume Version", "Fit Score", "Notes", "Created At",
     ])
     for a in apps:
@@ -90,6 +90,7 @@ def export_csv(db: Session = Depends(get_db), user: models.User = Depends(get_cu
             a.applied_at.isoformat() if a.applied_at else "",
             a.salary_expectation or "",
             a.recruiter_email or "",
+            a.recruiter_phone or "",
             a.resume_version or "",
             a.fit_score if a.fit_score is not None else "",
             a.notes or "",
@@ -164,7 +165,7 @@ def update_application(
                 to_status=new_status.value,
             ))
 
-    for field in ("resume_version", "notes", "fit_score", "recruiter_email", "salary_expectation"):
+    for field in ("resume_version", "notes", "fit_score", "recruiter_email", "recruiter_phone", "salary_expectation"):
         if field in data:
             setattr(app_row, field, data[field])
 

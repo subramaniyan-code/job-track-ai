@@ -145,6 +145,7 @@ class ApplicationCreate(BaseModel):
     resume_version: Optional[str] = None
     notes: Optional[str] = None
     recruiter_email: Optional[str] = None
+    recruiter_phone: Optional[str] = None
     salary_expectation: Optional[str] = None
 
 
@@ -154,6 +155,7 @@ class ApplicationUpdate(BaseModel):
     notes: Optional[str] = None
     fit_score: Optional[float] = None
     recruiter_email: Optional[str] = None
+    recruiter_phone: Optional[str] = None
     salary_expectation: Optional[str] = None
 
 
@@ -163,6 +165,7 @@ class ApplicationOut(BaseModel):
     status: ApplicationStatus
     fit_score: Optional[float]
     recruiter_email: Optional[str]
+    recruiter_phone: Optional[str]
     resume_version: Optional[str]
     salary_expectation: Optional[str]
     notes: Optional[str]

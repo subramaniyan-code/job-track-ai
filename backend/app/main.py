@@ -16,6 +16,7 @@ def run_migrations():
     try:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS salary_expectation VARCHAR;"))
+            conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS recruiter_phone VARCHAR;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency VARCHAR DEFAULT 'INR';"))

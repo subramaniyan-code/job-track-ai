@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Edit3, Mail, Download, Clock } from "lucide-react";
+import { ExternalLink, Edit3, Mail, Download, Clock, Phone } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
 import Modal from "@/components/Modal";
@@ -58,6 +58,7 @@ function Timeline({ applicationId }: { applicationId: string }) {
 
 function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () => void; onSaved: (a: Application) => void }) {
   const [recruiterEmail, setRecruiterEmail] = useState(app.recruiter_email || "");
+  const [recruiterPhone, setRecruiterPhone] = useState(app.recruiter_phone || "");
   const [notes, setNotes] = useState(app.notes || "");
   const [resumeVersion, setResumeVersion] = useState(app.resume_version || "");
   const [salaryExpectation, setSalaryExpectation] = useState(app.salary_expectation || "");
@@ -68,6 +69,7 @@ function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () =>
     try {
       const updated = await api.patch<Application>(`/applications/${app.id}`, {
         recruiter_email: recruiterEmail || null,
+        recruiter_phone: recruiterPhone || null,
         notes: notes || null,
         resume_version: resumeVersion || null,
         salary_expectation: salaryExpectation || null,
@@ -86,10 +88,15 @@ function EditModal({ app, onClose, onSaved }: { app: Application; onClose: () =>
           <label className="label">Salary expectation</label>
           <input className="input" value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. ₹18 LPA" />
         </div>
-        <div>
-          <label className="label">Recruiter / contact email</label>
-          <input className="input" value={recruiterEmail} onChange={(e) => setRecruiterEmail(e.target.value)} placeholder="recruiter@company.com" />
-          <p className="text-xs text-slate-400 mt-1">Needed so follow-up emails know where to send.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Recruiter email</label>
+            <input className="input" value={recruiterEmail} onChange={(e) => setRecruiterEmail(e.target.value)} placeholder="recruiter@company.com" />
+          </div>
+          <div>
+            <label className="label">Recruiter phone / mobile</label>
+            <input className="input" value={recruiterPhone} onChange={(e) => setRecruiterPhone(e.target.value)} placeholder="+91 98765 43210" />
+          </div>
         </div>
         <div>
           <label className="label">Resume version used</label>
@@ -204,8 +211,13 @@ function ApplicationsContent() {
                         </button>
                       </div>
                       {app.recruiter_email && (
-                        <p className="flex items-center gap-1 text-[11px] text-slate-400 mt-1.5">
-                          <Mail size={11} /> {app.recruiter_email}
+                        <p className="flex items-center gap-1 text-[11px] text-slate-400 mt-1.5 truncate">
+                          <Mail size={11} className="shrink-0" /> {app.recruiter_email}
+                        </p>
+                      )}
+                      {app.recruiter_phone && (
+                        <p className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium mt-0.5 truncate">
+                          <Phone size={11} className="shrink-0" /> {app.recruiter_phone}
                         </p>
                       )}
                     </div>
