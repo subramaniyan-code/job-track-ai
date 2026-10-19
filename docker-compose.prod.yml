@@ -1,9 +1,16 @@
 name: jobtrack-ai
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: jobtrack
       POSTGRES_PASSWORD: jobtrack
@@ -17,6 +24,7 @@ services:
   backend:
     image: ghcr.io/${OWNER:-subramaniyan-code}/jobtrack-backend:${TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       DATABASE_URL: postgresql://jobtrack:jobtrack@db:5432/jobtrack
@@ -26,6 +34,7 @@ services:
   frontend:
     image: ghcr.io/${OWNER:-subramaniyan-code}/jobtrack-frontend:${TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on: [backend]
     ports: ["3100:3000"]
 volumes:

@@ -60,6 +60,128 @@ def _find_matching_application(db, user_id: str, company: str | None):
     return None
 
 
+def _auto_track_or_update_application(
+    db,
+    user_id: str,
+    classification_type: str,
+    company: str | None,
+    job_title: str | None,
+    platform: str | None,
+    message_id: str,
+    subject: str,
+    body: str,
+    received_at: datetime | None,
+) -> models.Application | None:
+    """Creates a new tracked application if one doesn't exist, or advances status."""
+    if classification_type not in ["application_confirmation", "interview_invite", "offer", "rejection"]:
+        return None
+
+    matched_app = _find_matching_application(db, user_id, company)
+    company_name = company or "Direct Application"
+    title = job_title or (f"Role at {company_name}" if company else (subject[:60] if subject else "Job Application"))
+    platform_name = platform or "Email"
+    received_time = received_at or datetime.utcnow()
+
+    status_map = {
+        "application_confirmation": models.ApplicationStatus.applied,
+        "interview_invite": models.ApplicationStatus.interviewing,
+        "offer": models.ApplicationStatus.offer,
+        "rejection": models.ApplicationStatus.rejected,
+    }
+    target_status = status_map.get(classification_type, models.ApplicationStatus.applied)
+
+    if not matched_app:
+        # Create Job
+        job = models.Job(
+            source="email",
+            external_id=f"email-{message_id}",
+            title=title,
+            company=company_name,
+            platform=platform_name,
+            url="",
+            description=body[:1000] if body else None,
+            posted_at=received_time,
+        )
+        db.add(job)
+        db.flush()
+
+        # Create Application
+        matched_app = models.Application(
+            user_id=user_id,
+            job_id=job.id,
+            status=target_status,
+            applied_at=received_time,
+            last_activity_at=received_time,
+            notes=f"Auto-tracked from email: {subject}",
+        )
+        db.add(matched_app)
+        db.flush()
+
+        db.add(models.ApplicationEvent(
+            application_id=matched_app.id,
+            user_id=user_id,
+            event_type="imported",
+            to_status=target_status.value,
+            note=f"Imported from {classification_type} email: {subject[:100]}",
+        ))
+    else:
+        # Advance status
+        if classification_type == "application_confirmation":
+            if matched_app.status == models.ApplicationStatus.saved:
+                matched_app.status = models.ApplicationStatus.applied
+                matched_app.applied_at = received_time
+        elif matched_app.status != target_status:
+            prev = matched_app.status.value if hasattr(matched_app.status, "value") else str(matched_app.status)
+            matched_app.status = target_status
+            db.add(models.ApplicationEvent(
+                application_id=matched_app.id,
+                user_id=user_id,
+                event_type="status_change",
+                from_status=prev,
+                to_status=target_status.value,
+                note=f"Status updated via email: {subject[:100]}",
+            ))
+        matched_app.last_activity_at = datetime.utcnow()
+
+    return matched_app
+
+
+def backfill_unmatched_insights(db):
+    """
+    Scans existing email insights and creates/links application records for any
+    application confirmations, interview invites, rejections, or offers that were
+    previously stored without an application row.
+    """
+    unmatched = db.query(models.EmailInsight).filter(
+        models.EmailInsight.matched_application_id == None,
+        models.EmailInsight.insight_type.in_([
+            models.EmailInsightType.application_confirmation,
+            models.EmailInsightType.interview_invite,
+            models.EmailInsightType.offer,
+            models.EmailInsightType.rejection,
+        ]),
+    ).all()
+
+    for ins in unmatched:
+        itype = ins.insight_type.value if hasattr(ins.insight_type, "value") else str(ins.insight_type)
+        app = _auto_track_or_update_application(
+            db=db,
+            user_id=ins.user_id,
+            classification_type=itype,
+            company=ins.company,
+            job_title=ins.job_title,
+            platform=ins.platform,
+            message_id=ins.message_id,
+            subject=ins.subject or "",
+            body="",
+            received_at=ins.received_at,
+        )
+        if app:
+            ins.matched_application_id = app.id
+
+    db.commit()
+
+
 async def poll_one_account(db, account: models.EmailAccount, force_backfill: bool = False, raise_on_error: bool = False):
     fetched, new_watermark = await asyncio.to_thread(fetch_new_job_emails, account, force_backfill, raise_on_error)
 
@@ -77,7 +199,19 @@ async def poll_one_account(db, account: models.EmailAccount, force_backfill: boo
         if not classification or classification.type == "other":
             continue
 
-        matched_app = _find_matching_application(db, account.user_id, classification.company)
+        platform_str = infer_platform(email_address=msg.from_address)
+        matched_app = _auto_track_or_update_application(
+            db=db,
+            user_id=account.user_id,
+            classification_type=classification.type,
+            company=classification.company,
+            job_title=classification.job_title,
+            platform=platform_str,
+            message_id=msg.message_id,
+            subject=msg.subject,
+            body=msg.body,
+            received_at=msg.received_at,
+        )
 
         insight = models.EmailInsight(
             user_id=account.user_id,
@@ -88,18 +222,13 @@ async def poll_one_account(db, account: models.EmailAccount, force_backfill: boo
             insight_type=classification.type,
             company=classification.company,
             job_title=classification.job_title,
-            platform=infer_platform(email_address=msg.from_address),
+            platform=platform_str,
             summary=classification.summary,
             matched_application_id=matched_app.id if matched_app else None,
             extracted_jobs=classification.extracted_jobs or None,
         )
         db.add(insight)
         new_insights_count += 1
-
-        # A detected reply is itself useful signal — bump the matched
-        # application's last_activity_at so it surfaces as recently active.
-        if matched_app:
-            matched_app.last_activity_at = datetime.utcnow()
 
     account.last_seen_uid = new_watermark
     db.commit()

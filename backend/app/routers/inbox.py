@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..deps import get_current_user
-from ..scheduler import poll_one_account
+from ..scheduler import poll_one_account, backfill_unmatched_insights
 
 router = APIRouter(prefix="/inbox", tags=["inbox"])
 
@@ -54,6 +54,7 @@ async def sync_inbox_now(
 
     try:
         new_count, fetched_count = await poll_one_account(db, account, force_backfill=force_backfill, raise_on_error=True)
+        backfill_unmatched_insights(db)
     except Exception as e:
         error_text = str(e)
         if "AUTHENTICATIONFAILED" in error_text:

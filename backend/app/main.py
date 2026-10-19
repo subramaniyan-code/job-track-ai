@@ -11,12 +11,21 @@ from .routers import auth, connectors, jobs, applications, followups, dashboard,
 
 def run_migrations():
     from sqlalchemy import text
+    from .database import SessionLocal
+    from .scheduler import backfill_unmatched_insights
     try:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS salary_expectation VARCHAR;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max FLOAT;"))
             conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_currency VARCHAR DEFAULT 'INR';"))
+    except Exception:
+        pass
+
+    try:
+        db = SessionLocal()
+        backfill_unmatched_insights(db)
+        db.close()
     except Exception:
         pass
 
