@@ -54,11 +54,57 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
+def _heuristic_classify(from_address: str, subject: str, body: str) -> EmailClassification:
+    text = f"{subject} {body[:600]}".lower()
+    from_lower = (from_address or "").lower()
+
+    if any(k in text for k in ["interview", "screening", "assessment", "round", "technical discussion", "invitation"]):
+        etype = "interview_invite"
+    elif any(k in text for k in ["regret", "unfortunately", "not moving forward", "other candidates", "unsuccessful", "position has been filled"]):
+        etype = "rejection"
+    elif any(k in text for k in ["offer letter", "job offer", "pleased to offer"]):
+        etype = "offer"
+    elif any(k in text for k in ["job alert", "recommended jobs", "matching jobs", "jobs for you", "vacancies", "open positions"]):
+        etype = "job_alert"
+    else:
+        etype = "application_confirmation"
+
+    company = None
+    m = re.search(r"\bat\s+([A-Za-z0-9&.\- ]{2,30})", subject, re.IGNORECASE)
+    if m:
+        company = m.group(1).strip()
+    elif "naukri" in from_lower:
+        company = "Naukri"
+    elif "linkedin" in from_lower:
+        company = "LinkedIn"
+    elif "indeed" in from_lower:
+        company = "Indeed"
+    elif "@" in from_address:
+        domain = from_address.split("@")[-1].split(">")[0].strip().lower()
+        parts = domain.split(".")
+        if len(parts) >= 2 and parts[-2] not in ["gmail", "yahoo", "outlook", "hotmail"]:
+            company = parts[-2].capitalize()
+
+    job_title = None
+    m_title = re.search(r"(?:for|role|position|as)\s+([A-Za-z0-9/.\- ]{2,40})", subject, re.IGNORECASE)
+    if m_title:
+        job_title = m_title.group(1).strip()
+
+    summary = (subject[:80] + "...") if len(subject) > 80 else (subject or "Job application update")
+
+    return EmailClassification(
+        type=etype,
+        company=company,
+        job_title=job_title,
+        summary=summary,
+        extracted_jobs=[],
+    )
+
+
 async def classify_email(from_address: str, subject: str, body: str) -> Optional[EmailClassification]:
-    """Returns None (rather than raising) on any API/parse failure — a
-    classification miss should never crash the poll loop."""
+    """Classifies an email using Gemini REST API, or seamlessly falls back to rule-based heuristics."""
     if not settings.google_ai_api_key:
-        return None
+        return _heuristic_classify(from_address, subject, body)
 
     prompt = CLASSIFY_PROMPT.format(from_address=from_address, subject=subject, body=body)
     url = (
@@ -71,7 +117,7 @@ async def classify_email(from_address: str, subject: str, body: str) -> Optional
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -87,4 +133,5 @@ async def classify_email(from_address: str, subject: str, body: str) -> Optional
             extracted_jobs=parsed.get("extracted_jobs") or [],
         )
     except Exception:
-        return None
+        # Fall back gracefully to heuristic classification rather than dropping the email
+        return _heuristic_classify(from_address, subject, body)

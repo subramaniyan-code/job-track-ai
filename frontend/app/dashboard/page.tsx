@@ -150,13 +150,22 @@ function DashboardContent() {
   async function syncInbox() {
     setSyncing(true);
     try {
-      await api.post("/inbox/sync");
+      const res = await api.post<{ status: string; new_insights: number; scanned_job_emails: number; total_insights: number }>(
+        "/inbox/sync?force_backfill=true"
+      );
       const [newInbox, newStats] = await Promise.all([
         api.get<EmailInsight[]>("/inbox?limit=10"),
         api.get<DashboardStats>("/dashboard/stats"),
       ]);
       setInbox(newInbox);
       setStats(newStats);
+      if (res.new_insights > 0) {
+        alert(`Inbox synced successfully! Discovered ${res.new_insights} new job update(s) in your email.`);
+      } else if (res.total_insights > 0) {
+        alert(`Inbox is up to date! Showing ${res.total_insights} job update(s) on your dashboard.`);
+      } else {
+        alert("Inbox connected and checked for the past 30 days! No job application or interview emails found yet.");
+      }
     } catch (err: any) {
       alert(err.message || "Failed to check inbox. Make sure your email account with IMAP is connected in Settings.");
     } finally {

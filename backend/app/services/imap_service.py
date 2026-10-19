@@ -11,6 +11,7 @@ Deliberately conservative for a small (~1GB RAM) server:
 """
 import email
 import imaplib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.header import decode_header
@@ -21,20 +22,27 @@ from .. import models
 from ..config import settings
 from ..security import decrypt_str
 
+log = logging.getLogger("imap")
+
 MAX_BODY_CHARS = 4000
 
 # Senders/subject keywords that usually mean "this is job-related" — used to
 # skip everything else cheaply, before any AI call is made (AI calls cost
 # money and CPU; this filter keeps both down).
 JOB_SENDER_HINTS = [
-    "naukri.com", "linkedin.com", "indeed.com", "shine.com", "foundit.in",
-    "monsterindia.com", "greenhouse.io", "lever.co", "workday.com",
-    "smartrecruiters.com", "myworkday.com", "icims.com", "ashbyhq.com",
+    "naukri", "linkedin", "indeed", "shine.com", "foundit.in", "monsterindia.com",
+    "greenhouse.io", "lever.co", "workday.com", "smartrecruiters.com", "myworkday.com",
+    "myworkdayjobs.com", "icims.com", "ashbyhq.com", "glassdoor.com", "instahyre.com",
+    "hirist.com", "cutshort.io", "apna.co", "internshala.com", "wellfound.com",
+    "angel.co", "talview.com", "hackerrank.com", "codility.com", "hirevue.com",
 ]
+
 JOB_SUBJECT_HINTS = [
     "application", "applied", "interview", "job alert", "new jobs",
     "shortlisted", "offer", "hiring", "recruiter", "position", "opportunity",
-    "we've received your application", "thank you for applying",
+    "we've received your application", "thank you for applying", "candidacy",
+    "candidate", "assessment", "screening", "invitation", "test", "status",
+    "career", "careers", "resume", "role", "round", "submission",
 ]
 
 
@@ -72,83 +80,140 @@ def _extract_body(msg: email.message.Message) -> str:
         for part in msg.walk():
             if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
                 try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore")
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        txt = payload.decode(part.get_content_charset() or "utf-8", errors="ignore").strip()
+                        if txt:
+                            return txt
                 except Exception:
                     continue
-        # fall back to first html part if no plain text found
         for part in msg.walk():
-            if part.get_content_type() == "text/html" and not part.get("Content-Disposition"):
+            if part.get_content_type() == "text/html":
                 try:
-                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore")
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        raw_html = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                        clean = re.sub(r"<[^>]+>", " ", raw_html)
+                        clean = re.sub(r"\s+", " ", clean).strip()
+                        if clean:
+                            return clean
                 except Exception:
                     continue
         return ""
     else:
         try:
-            return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="ignore")
+            payload = msg.get_payload(decode=True)
+            if payload:
+                txt = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                if msg.get_content_type() == "text/html":
+                    txt = re.sub(r"<[^>]+>", " ", txt)
+                    txt = re.sub(r"\s+", " ", txt).strip()
+                return txt
+            return str(msg.get_payload() or "")
         except Exception:
-            return str(msg.get_payload())
+            return str(msg.get_payload() or "")
 
 
-def fetch_new_job_emails(account: models.EmailAccount) -> tuple[list[FetchedEmail], Optional[str]]:
+def fetch_new_job_emails(
+    account: models.EmailAccount,
+    force_backfill: bool = False,
+    raise_on_error: bool = False,
+) -> tuple[list[FetchedEmail], Optional[str]]:
     """
-    Connects, fetches up to `inbox_max_emails_per_poll` new messages since
-    `account.last_seen_uid`, filters to job-related ones, and returns them
-    plus the new watermark UID to persist (caller's responsibility to save).
-    Returns ([], None) on any connection failure rather than raising, so one
-    broken account never takes down the scheduler loop for everyone else.
+    Connects to IMAP, searches recent emails, fast-scans headers for job-related messages,
+    downloads matching bodies, and returns them plus the updated UID watermark.
     """
-    password = decrypt_str(account.smtp_password_encrypted) if not account.imap_host else decrypt_str(account.smtp_password_encrypted)
+    password = decrypt_str(account.smtp_password_encrypted) if account.smtp_password_encrypted else ""
+    if not password:
+        err = "No password stored for this email account. Please update your App Password in Settings."
+        log.error(err)
+        if raise_on_error:
+            raise ValueError(err)
+        return [], account.last_seen_uid
+
+    imap_host = account.imap_host or "imap.gmail.com"
+    imap_port = account.imap_port or 993
+
+    if ("gmail" in imap_host.lower()) and len(password.replace(" ", "")) == 16:
+        password = password.replace(" ", "")
+    else:
+        password = password.strip()
+
     results: list[FetchedEmail] = []
     new_watermark = account.last_seen_uid
 
     try:
-        conn = imaplib.IMAP4_SSL(account.imap_host, account.imap_port or 993)
-        conn.login(account.smtp_username, password)
+        log.info("Connecting to IMAP host %s:%s for user %s", imap_host, imap_port, account.smtp_username)
+        conn = imaplib.IMAP4_SSL(imap_host, imap_port)
+        conn.login(account.smtp_username.strip(), password)
         conn.select("INBOX", readonly=True)
 
-        if account.last_seen_uid:
+        utcnow = datetime.utcnow()
+        if account.last_seen_uid and not force_backfill:
             search_criterion = f"(UID {int(account.last_seen_uid) + 1}:*)"
         else:
-            # First run ever for this account: don't backfill the whole
-            # mailbox (could be years of mail) — just the configured window
-            # (default 30 days). If that window has more mail than one poll
-            # can process, we take the OLDEST batch first (see below) and
-            # advance the watermark forward, so later polls pick up right
-            # where this one left off instead of jumping straight to "now"
-            # and silently skipping everything in between.
-            since_date = (datetime.utcnow() - timedelta(days=settings.inbox_backfill_days)).strftime("%d-%b-%Y")
-            search_criterion = f'(SINCE "{since_date}")'
+            since_dt = utcnow - timedelta(days=settings.inbox_backfill_days)
+            since_str = f"{since_dt.day}-{since_dt.strftime('%b')}-{since_dt.year}"
+            search_criterion = f'(SINCE "{since_str}")'
 
+        log.info("Running IMAP search with criterion: %s", search_criterion)
         status_, data = conn.uid("search", None, search_criterion)
         if status_ != "OK" or not data or not data[0]:
             conn.logout()
+            log.info("No matching messages found in IMAP search.")
             return [], new_watermark
 
-        # Oldest-first, capped per run. Taking the newest N instead would
-        # permanently skip older mail once the watermark jumps past it —
-        # this way a big backfill is simply spread across several poll
-        # cycles until it's fully caught up.
-        uids = data[0].split()[:settings.inbox_max_emails_per_poll]
+        uids = data[0].split()
+        total_found = len(uids)
+        log.info("Found %d total messages in search window", total_found)
+        if total_found == 0:
+            conn.logout()
+            return [], new_watermark
 
-        for uid in uids:
-            uid_str = uid.decode()
-            status_, msg_data = conn.uid("fetch", uid, "(RFC822)")
-            if status_ != "OK" or not msg_data or not msg_data[0]:
+        target_uids = uids[-150:] if total_found > 150 else uids
+
+        uid_set_str = b",".join(target_uids).decode()
+        status_, header_items = conn.uid(
+            "fetch",
+            uid_set_str,
+            "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])",
+        )
+
+        matched_job_uids: list[tuple[str, str, str, email.message.Message]] = []
+        if status_ == "OK" and header_items:
+            for item in header_items:
+                if not (isinstance(item, tuple) and len(item) == 2):
+                    continue
+                info = item[0].decode(errors="ignore")
+                raw_hdr = item[1]
+                msg_hdr = email.message_from_bytes(raw_hdr)
+
+                uid_match = re.search(r"UID\s+(\d+)", info, re.IGNORECASE)
+                if not uid_match:
+                    continue
+                uid_str = uid_match.group(1)
+
+                sender = _decode(msg_hdr.get("From", ""))
+                subject = _decode(msg_hdr.get("Subject", ""))
+
+                if _looks_job_related(sender, subject):
+                    matched_job_uids.append((uid_str, sender, subject, msg_hdr))
+
+        log.info(
+            "Identified %d job-related emails out of %d scanned headers. Downloading full content...",
+            len(matched_job_uids),
+            len(target_uids),
+        )
+
+        to_fetch = matched_job_uids[-settings.inbox_max_emails_per_poll:]
+        for uid_str, sender, subject, msg_hdr in to_fetch:
+            status_, full_data = conn.uid("fetch", uid_str, "(RFC822)")
+            if status_ != "OK" or not full_data or not full_data[0] or not isinstance(full_data[0], tuple):
                 continue
 
-            raw = msg_data[0][1]
-            msg = email.message_from_bytes(raw)
-
-            sender = _decode(msg.get("From", ""))
-            subject = _decode(msg.get("Subject", ""))
-
-            if not _looks_job_related(sender, subject):
-                new_watermark = uid_str
-                continue
-
-            body = _extract_body(msg)[:MAX_BODY_CHARS]
-            date_hdr = msg.get("Date")
+            full_msg = email.message_from_bytes(full_data[0][1])
+            body = _extract_body(full_msg)[:MAX_BODY_CHARS]
+            date_hdr = msg_hdr.get("Date") or full_msg.get("Date")
             try:
                 received_at = parsedate_to_datetime(date_hdr) if date_hdr else None
             except Exception:
@@ -156,18 +221,20 @@ def fetch_new_job_emails(account: models.EmailAccount) -> tuple[list[FetchedEmai
 
             results.append(FetchedEmail(
                 uid=uid_str,
-                message_id=msg.get("Message-ID", uid_str),
+                message_id=msg_hdr.get("Message-ID") or full_msg.get("Message-ID") or uid_str,
                 from_address=sender,
                 subject=subject,
                 received_at=received_at,
                 body=body,
             ))
-            new_watermark = uid_str
 
+        new_watermark = uids[-1].decode()
         conn.logout()
-    except Exception:
-        # Connection/auth failure, bad credentials, network hiccup, etc.
-        # Fail quietly — the scheduler will just try again next interval.
+        log.info("Successfully fetched %d job-related emails from inbox.", len(results))
+    except Exception as e:
+        log.error("IMAP error for %s: %s", account.smtp_username, e, exc_info=True)
+        if raise_on_error:
+            raise
         return [], account.last_seen_uid
 
     return results, new_watermark

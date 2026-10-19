@@ -135,6 +135,8 @@ function EmailAccountSection() {
   const [imapPort, setImapPort] = useState(993);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     api.get<EmailAccount | null>("/email-account").then((acc) => {
@@ -150,6 +152,28 @@ function EmailAccountSection() {
       }
     });
   }, []);
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await api.post<{ status: string; message: string }>("/email-account/test", {
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_username: smtpUsername,
+        smtp_password: smtpPassword,
+        from_name: fromName || null,
+        imap_enabled: imapEnabled,
+        imap_host: imapHost || null,
+        imap_port: imapPort,
+      });
+      setTestResult({ ok: true, message: res.message });
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err.message || "Connection test failed." });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -169,6 +193,8 @@ function EmailAccountSection() {
       setSmtpPassword("");
       setImapHost(acc.imap_host || "");
       setSaved(true);
+    } catch (err: any) {
+      alert(err.message || "Failed to save email settings.");
     } finally {
       setSaving(false);
     }
@@ -182,9 +208,14 @@ function EmailAccountSection() {
       </div>
       <div className="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
         <Info size={14} className="shrink-0 mt-0.5" />
-        <span>For Gmail/Outlook, use an <strong>app password</strong> (not your normal login password) \u2014 generate one from your account&apos;s security settings. This same password is used for both sending follow-ups and reading your inbox.</span>
+        <span>For Gmail/Outlook, use an <strong>app password</strong> (not your normal login password) — generate one from your Google Account security settings (myaccount.google.com/apppasswords).</span>
       </div>
-      {account && <p className="text-xs text-emerald-600">Connected as {account.smtp_username}</p>}
+      {account && (
+        <div className="flex items-center justify-between text-xs bg-emerald-50 text-emerald-800 p-2.5 rounded-lg border border-emerald-200">
+          <span>Connected: <strong>{account.smtp_username}</strong></span>
+          <span className="font-medium">{account.imap_enabled ? "✓ Inbox Sync Active" : "⚠ Inbox Sync Inactive (check box below)"}</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
           <label className="label">SMTP host (for sending)</label>
@@ -204,7 +235,7 @@ function EmailAccountSection() {
         </div>
         <div className="col-span-2">
           <label className="label">App password</label>
-          <input className="input" type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} placeholder={account ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave blank to keep current)" : ""} />
+          <input className="input" type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} placeholder={account ? "•••••••• (leave blank to keep current)" : "16-character app password"} />
         </div>
       </div>
 
@@ -214,13 +245,13 @@ function EmailAccountSection() {
           Analyze my inbox for job replies &amp; alerts
         </label>
         <p className="text-xs text-slate-500 -mt-1">
-          Reads job-related emails (Naukri, LinkedIn, Indeed, application confirmations, interview invites, etc.) every ~25 minutes and shows them on your dashboard. Nothing is ever sent from your inbox \u2014 this is read-only.
+          Reads job-related emails (Naukri, LinkedIn, Indeed, application confirmations, interview invites, etc.) every ~25 minutes and shows them on your dashboard. Nothing is ever sent from your inbox — this is read-only.
         </p>
         {imapEnabled && (
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className="label">IMAP host</label>
-              <input className="input" value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="auto-detected for Gmail/Outlook/Yahoo, or enter your provider's IMAP host" />
+              <input className="input" value={imapHost} onChange={(e) => setImapHost(e.target.value)} placeholder="imap.gmail.com" />
             </div>
             <div>
               <label className="label">IMAP port</label>
@@ -230,10 +261,21 @@ function EmailAccountSection() {
         )}
       </div>
 
-      <button onClick={save} disabled={saving} className="btn btn-primary w-full">
-        {saving ? "Saving\u2026" : "Save email settings"}
-      </button>
-      {saved && <p className="text-xs text-emerald-600 text-center">Saved.</p>}
+      {testResult && (
+        <div className={`p-3 rounded-lg text-xs leading-relaxed border ${testResult.ok ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-rose-50 border-rose-300 text-rose-800"}`}>
+          {testResult.message}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button type="button" onClick={testConnection} disabled={testing || saving} className="btn btn-secondary flex-1">
+          {testing ? "Testing connection…" : "Test Connection"}
+        </button>
+        <button type="button" onClick={save} disabled={saving || testing} className="btn btn-primary flex-1">
+          {saving ? "Saving…" : "Save email settings"}
+        </button>
+      </div>
+      {saved && <p className="text-xs text-emerald-600 text-center font-medium">Settings saved successfully.</p>}
     </div>
   );
 }

@@ -59,7 +59,7 @@ class EmailAccountCreate(BaseModel):
     smtp_host: str
     smtp_port: int = 587
     smtp_username: str
-    smtp_password: str
+    smtp_password: Optional[str] = ""
     from_name: Optional[str] = None
     imap_host: Optional[str] = None  # left blank -> auto-derived from smtp_host where possible
     imap_port: int = 993

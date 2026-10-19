@@ -60,9 +60,10 @@ def _find_matching_application(db, user_id: str, company: str | None):
     return None
 
 
-async def poll_one_account(db, account: models.EmailAccount):
-    fetched, new_watermark = await asyncio.to_thread(fetch_new_job_emails, account)
+async def poll_one_account(db, account: models.EmailAccount, force_backfill: bool = False, raise_on_error: bool = False):
+    fetched, new_watermark = await asyncio.to_thread(fetch_new_job_emails, account, force_backfill, raise_on_error)
 
+    new_insights_count = 0
     for msg in fetched:
         # Dedup: skip anything we've already stored for this user.
         exists = db.query(models.EmailInsight).filter(
@@ -93,6 +94,7 @@ async def poll_one_account(db, account: models.EmailAccount):
             extracted_jobs=classification.extracted_jobs or None,
         )
         db.add(insight)
+        new_insights_count += 1
 
         # A detected reply is itself useful signal — bump the matched
         # application's last_activity_at so it surfaces as recently active.
@@ -101,6 +103,7 @@ async def poll_one_account(db, account: models.EmailAccount):
 
     account.last_seen_uid = new_watermark
     db.commit()
+    return new_insights_count, len(fetched)
 
 
 async def poll_all_inboxes():

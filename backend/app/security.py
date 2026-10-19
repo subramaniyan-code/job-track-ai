@@ -64,4 +64,9 @@ def encrypt_str(value: str) -> str:
 
 
 def decrypt_str(token: str) -> str:
-    return _fernet().decrypt(token.encode()).decode()
+    if not token:
+        return ""
+    try:
+        return _fernet().decrypt(token.encode()).decode()
+    except Exception:
+        return ""
