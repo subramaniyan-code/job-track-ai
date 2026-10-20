@@ -148,8 +148,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
-                    "--headless=new",
-                    "--disable-blink-features=AutomationControlled",
+                                        "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-infobars",
@@ -202,10 +201,14 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             # Warm up session on homepage so Akamai validates the browser before searching
             print("[NAUKRI_BOT] Warming up session at https://www.naukri.com...", flush=True)
             try:
-                await page.goto("https://www.naukri.com", wait_until="domcontentloaded", timeout=30000)
+                resp = await page.goto("https://www.naukri.com", wait_until="load", timeout=35000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
                 await _human_delay(2, 4)
                 warmup_title = await page.title()
-                print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}'", flush=True)
+                print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}' (HTTP {resp.status if resp else 'N/A'})", flush=True)
             except Exception as e:
                 print(f"[NAUKRI_BOT] Homepage warmup note: {e}", flush=True)
 
@@ -221,18 +224,18 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 clean_kw = re.sub(r'\s+', ' ', clean_kw)
                 slug_kw = re.sub(r'[\s_]+', '-', clean_kw.lower())
 
-                candidate_urls = [
-                    f"https://www.naukri.com/jobs-in-india?k={quote_plus(clean_kw)}&l={quote_plus(primary_loc)}",
-                    f"https://www.naukri.com/jobs-in-india?k={quote_plus(clean_kw)}",
-                ]
+                candidate_urls = []
                 if loc_slug and loc_slug != "remote":
                     candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs-in-{loc_slug}")
                     candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs?k={quote_plus(clean_kw)}&l={quote_plus(primary_loc)}")
+                candidate_urls.append(f"https://www.naukri.com/{slug_kw}-jobs")
+                if "infrastructure" in slug_kw and loc_slug:
+                    candidate_urls.append(f"https://www.naukri.com/cloud-engineer-jobs-in-{loc_slug}")
 
                 for search_url in candidate_urls:
                     print(f"[NAUKRI_BOT] Trying search target: '{clean_kw}' in '{primary_loc}' -> {search_url}", flush=True)
                     try:
-                        await page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
+                        await page.goto(search_url, wait_until="load", timeout=45000)
                     except Exception as goto_err:
                         print(f"[NAUKRI_BOT] Navigation failed for {search_url}: {goto_err}", flush=True)
                         continue
@@ -283,7 +286,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         job_cards = await page.query_selector_all("a[href*='/job-listings-'], a[href*='-job-details-']")
 
                     page_title = await page.title()
-                    print(f"[NAUKRI_BOT] Page Title: '{page_title}' | Current URL: {page.url}", flush=True)
+                    html_len = len(await page.content())
+                    print(f"[NAUKRI_BOT] Page Title: '{page_title}' | URL: {page.url} | HTML size: {html_len} bytes", flush=True)
                     print(f"[NAUKRI_BOT] Found {len(job_cards)} job cards on search page", flush=True)
 
                     if job_cards:
