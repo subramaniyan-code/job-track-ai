@@ -416,20 +416,36 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                     # Click Apply
                     print(f"[NAUKRI_BOT] Direct apply button found! Clicking Apply for '{job_title}' at '{company}'...", flush=True)
-                    await apply_btn.click()
-                    await _human_delay(3, 5)
+                    try:
+                        await apply_btn.click()
+                    except Exception as click_err:
+                        print(f"[NAUKRI_BOT] Note on apply click: {click_err}", flush=True)
+
+                    # Allow any post-click navigation/redirect to settle
+                    try:
+                        await detail_page.wait_for_load_state("load", timeout=8000)
+                    except Exception:
+                        pass
+                    await _human_delay(2, 4)
 
                     # 4. Check for Questionnaires / Custom inputs
                     # If a modal appears with mandatory question inputs or textareas, skip!
-                    modal_questions = await detail_page.query_selector_all(
-                        ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']:visible"
-                    )
+                    modal_questions = []
+                    try:
+                        modal_questions = await detail_page.query_selector_all(
+                            ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']:visible"
+                        )
+                    except Exception:
+                        pass
+
                     if modal_questions and len(modal_questions) > 1:
                         print(f"[NAUKRI_BOT] Job '{job_title}' has questionnaire questions. Skipping safely.", flush=True)
-                        # Try to close modal
-                        close_btn = await detail_page.query_selector("button.crossIcon, [class*='close'], .icon-close")
-                        if close_btn:
-                            await close_btn.click()
+                        try:
+                            close_btn = await detail_page.query_selector("button.crossIcon, [class*='close'], .icon-close")
+                            if close_btn:
+                                await close_btn.click()
+                        except Exception:
+                            pass
                         db.add(models.NaukriBotLog(
                             user_id=user_id,
                             job_title=job_title,
@@ -445,11 +461,22 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         continue
 
                     # 5. Success verification
-                    await _human_delay(2, 4)
-                    post_content = await detail_page.content()
-                    applied_success = any(
-                        s in post_content.lower()
-                        for s in ["applied successfully", "application sent", "applied", "you have applied"]
+                    await _human_delay(1, 3)
+                    post_content = ""
+                    post_url = ""
+                    try:
+                        post_content = await detail_page.content()
+                        post_url = detail_page.url.lower()
+                    except Exception:
+                        pass
+
+                    applied_success = (
+                        any(
+                            s in post_content.lower()
+                            for s in ["applied successfully", "application sent", "applied", "you have applied", "application successful"]
+                        )
+                        or "apply/success" in post_url
+                        or "success" in post_url
                     )
 
                     if applied_success:
@@ -506,6 +533,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                 except Exception as card_err:
                     print(f"[NAUKRI_BOT] Error inspecting card #{inspected_count}: {card_err}", flush=True)
+                    try:
+                        if 'detail_page' in locals() and not detail_page.is_closed():
+                            await detail_page.close()
+                    except Exception:
+                        pass
                     continue
 
             # Update final session state
