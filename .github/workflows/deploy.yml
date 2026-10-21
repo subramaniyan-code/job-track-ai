@@ -53,4 +53,31 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
           scp docker-compose.prod.yml "$USER_@$HOST:$DIR/docker-compose.prod.yml"
-          echo "$GH_TOKEN" | ssh "$USER_@$HOST" "set -e; docker login ghcr.io -u $ACTOR --password-stdin; cd $DIR; export OWNER=$OWNER TAG=$SHA; docker compose -f docker-compose.prod.yml pull; docker compose -f docker-compose.prod.yml up -d --remove-orphans --force-recreate; docker image prune -f"
+          ssh "$USER_@$HOST" "
+            set -e
+            cd $DIR
+            export OWNER=$OWNER TAG=$SHA
+            
+            # Login with retry (handles transient DNS/network timeout)
+            login_success=0
+            for i in 1 2 3; do
+              echo '$GH_TOKEN' | docker login ghcr.io -u $ACTOR --password-stdin && { login_success=1; break; } || { echo 'Docker login retry in 5s...'; sleep 5; }
+            done
+            if [ \$login_success -eq 0 ]; then
+              echo 'Docker login failed after 3 attempts'
+              exit 1
+            fi
+            
+            # Pull with retry
+            pull_success=0
+            for i in 1 2 3; do
+              docker compose -f docker-compose.prod.yml pull && { pull_success=1; break; } || { echo 'Docker pull retry in 5s...'; sleep 5; }
+            done
+            if [ \$pull_success -eq 0 ]; then
+              echo 'Docker pull failed after 3 attempts'
+              exit 1
+            fi
+            
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans --force-recreate
+            docker image prune -f
+          "
