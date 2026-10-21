@@ -148,7 +148,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
-                                        "--disable-blink-features=AutomationControlled",
+                    "--headless=new",
+                    "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-infobars",
@@ -164,11 +165,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 locale="en-US",
                 timezone_id="Asia/Kolkata",
                 extra_http_headers={
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Sec-Ch-Ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
-                    "Sec-Ch-Ua-Mobile": "?0",
-                    "Sec-Ch-Ua-Platform": '"Windows"',
-                    "Upgrade-Insecure-Requests": "1",
+                    "accept-language": "en-US,en;q=0.9",
+                    "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "upgrade-insecure-requests": "1",
                 },
             )
 
@@ -229,7 +230,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     break
 
                 clean_kw = re.sub(r'[^a-zA-Z0-9\s-]', ' ', raw_kw).strip()
+                if primary_loc:
+                    clean_kw = re.sub(rf'\b{re.escape(primary_loc)}\b', '', clean_kw, flags=re.IGNORECASE).strip()
                 clean_kw = re.sub(r'\s+', ' ', clean_kw)
+                if not clean_kw:
+                    continue
                 slug_kw = re.sub(r'[\s_]+', '-', clean_kw.lower())
 
                 candidate_urls = []
@@ -285,7 +290,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         pass
 
                     await _smooth_scroll(page)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
 
                     job_cards = await page.query_selector_all(combined_selector)
 
@@ -354,7 +359,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     # Open job details in a new page/tab or navigate
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
                     detail_page = await context.new_page()
-                    await detail_page.goto(job_url, wait_until="domcontentloaded", timeout=35000)
+                    await detail_page.goto(job_url, referer=page.url, wait_until="load", timeout=35000)
                     try:
                         await detail_page.wait_for_selector(
                             "#apply-button, button.apply-button, button:has-text('Apply'), [id*='apply-button'], [class*='apply-button'], [class*='company-site']",
