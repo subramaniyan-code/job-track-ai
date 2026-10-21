@@ -277,9 +277,12 @@ class NaukriBotLog(Base):
     company = Column(String, nullable=True)
     location = Column(String, nullable=True)
     url = Column(String, nullable=True)
+    external_apply_url = Column(String, nullable=True)
+    key_skills = Column(Text, nullable=True)
+    recruiter_email = Column(String, nullable=True)
+    recruiter_phone = Column(String, nullable=True)
     action = Column(String, nullable=False)   # 'applied', 'skipped_redirect', 'skipped_questions', 'failed'
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
-

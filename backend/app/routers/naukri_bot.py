@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from collections import Counter
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -164,3 +165,42 @@ def get_naukri_bot_logs(
         .limit(limit)
         .all()
     )
+
+
+@router.get("/skills-insights", response_model=schemas.SkillsInsightsOut)
+def get_skills_insights(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Aggregates all extracted JD keywords and recruiter contacts across inspected jobs."""
+    logs = db.query(models.NaukriBotLog).filter(models.NaukriBotLog.user_id == user.id).all()
+
+    skill_counter = Counter()
+    contacts = []
+    seen_contacts = set()
+
+    for l in logs:
+        if l.key_skills:
+            for s in l.key_skills.split(","):
+                s_clean = s.strip()
+                if len(s_clean) > 1 and not s_clean.lower().startswith("suggested"):
+                    skill_counter[s_clean] += 1
+
+        if l.recruiter_email or l.recruiter_phone:
+            key = f"{l.recruiter_email}:{l.recruiter_phone}"
+            if key not in seen_contacts:
+                seen_contacts.add(key)
+                contacts.append({
+                    "job_title": l.job_title,
+                    "company": l.company or "Confidential",
+                    "email": l.recruiter_email,
+                    "phone": l.recruiter_phone,
+                    "url": l.external_apply_url or l.url,
+                })
+
+    top_skills = [{"keyword": k, "count": c} for k, c in skill_counter.most_common(35)]
+    return {
+        "top_skills": top_skills,
+        "contacts": contacts,
+        "total_jobs_analyzed": len(logs),
+    }

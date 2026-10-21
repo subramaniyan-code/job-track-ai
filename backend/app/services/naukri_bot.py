@@ -324,9 +324,12 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                                 if (compEl) {
                                     company = (compEl.innerText || compEl.textContent || '').trim();
                                 }
-                                const locEl = card.querySelector('.loc-wrap, [class*="location"], [class*="locWdl"], [class*="row3"] span');
+                                const locEl = card.querySelector('.loc-wrap, .locWdl, [class*="locWdl"], [class*="loc-wrap"] span, [class*="locIcon"] ~ span');
                                 if (locEl) {
-                                    location = (locEl.innerText || locEl.textContent || '').trim();
+                                    const t = (locEl.innerText || locEl.textContent || '').trim();
+                                    if (t && !t.toLowerCase().includes('yr') && !t.toLowerCase().includes('year') && !t.includes('₹') && !t.toLowerCase().includes('lacs') && !t.toLowerCase().includes('not disclosed')) {
+                                        location = t;
+                                    }
                                 }
                             }
 
@@ -387,6 +390,68 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     await _human_delay(2, 3)
                     await _smooth_scroll(detail_page)
 
+                    # Extract rich JD metadata: clean location, key skills chips, recruiter details
+                    detail_meta = await detail_page.evaluate("""() => {
+                        // 1. Precise location from detail page header
+                        let loc = '';
+                        const locCandidates = document.querySelectorAll('.styles_j-tuple-location__... span, .styles_j-tuple-location__..., .loc-wrap, [class*="location"]');
+                        for (const el of locCandidates) {
+                            const t = (el.innerText || el.textContent || '').trim();
+                            if (t && !t.toLowerCase().includes('yr') && !t.toLowerCase().includes('year') && !t.includes('₹') && !t.toLowerCase().includes('lacs') && !t.toLowerCase().includes('not disclosed')) {
+                                loc = t;
+                                break;
+                            }
+                        }
+
+                        // 2. Key skills tags
+                        const skillEls = document.querySelectorAll('[class*="key-skill"] a, [class*="key-skill"] span, [class*="chip"], a[href*="/tags/"], .styles_chip__...');
+                        const skillsSet = new Set();
+                        for (const el of skillEls) {
+                            const s = (el.innerText || el.textContent || '').trim();
+                            if (s && s.length >= 2 && s.length <= 40 && !s.toLowerCase().includes('suggested') && !s.toLowerCase().includes('key skill')) {
+                                skillsSet.add(s);
+                            }
+                        }
+
+                        // 3. Page body text for recruiter info / contacts
+                        const bodyText = document.body.innerText || '';
+                        if (skillsSet.size === 0) {
+                            const techKeywords = [
+                                'AWS', 'Azure', 'GCP', 'Terraform', 'Kubernetes', 'Docker', 'Ansible', 'CI/CD',
+                                'Python', 'Linux', 'Bash', 'Git', 'Jenkins', 'Prometheus', 'Grafana', 'OpenShift',
+                                'Helm', 'CloudFormation', 'Kafka', 'SRE', 'DevOps', 'IaC', 'Networking', 'Security'
+                            ];
+                            for (const kw of techKeywords) {
+                                const re = new RegExp('\\\\b' + kw + '\\\\b', 'i');
+                                if (re.test(bodyText)) {
+                                    skillsSet.add(kw);
+                                }
+                            }
+                        }
+
+                        // 4. Contact email
+                        const emailMatch = bodyText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/);
+                        const email = emailMatch ? emailMatch[1] : null;
+
+                        // 5. Contact phone / whatsapp
+                        const phoneMatch = bodyText.match(/(?:(?:\\+91|0)[-.\\s]?)?[6-9]\\d{9}\\b/);
+                        const phone = phoneMatch ? phoneMatch[0] : null;
+
+                        return {
+                            location: loc,
+                            keySkills: Array.from(skillsSet),
+                            email: email,
+                            phone: phone
+                        };
+                    }""")
+
+                    if detail_meta.get("location"):
+                        job_loc = detail_meta["location"]
+
+                    key_skills_list = detail_meta.get("keySkills") or []
+                    recruiter_email = detail_meta.get("email")
+                    recruiter_phone = detail_meta.get("phone")
+
                     # Check for direct apply button vs external redirect CTA button
                     apply_btn = await detail_page.query_selector(
                         "#apply-button, button.apply-button, [id*='apply-button'], [class*='apply-button'], button:has-text('Apply'), a:has-text('Apply')"
@@ -397,6 +462,13 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             "button[id*='company-site'], [class*='company-site'], a:has-text('Apply on company site'), a:has-text('Apply on Company Website')"
                         )
                         if ext_btn:
+                            ext_url = None
+                            try:
+                                ext_url = await ext_btn.evaluate("el => el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-external-url') || ''")
+                            except Exception:
+                                pass
+                            external_apply_url = ext_url if (ext_url and ext_url.startswith("http")) else job_url
+
                             print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal. Skipping.", flush=True)
                             db.add(models.NaukriBotLog(
                                 user_id=user_id,
@@ -404,6 +476,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                                 company=company,
                                 location=job_loc,
                                 url=job_url,
+                                external_apply_url=external_apply_url,
+                                key_skills=", ".join(key_skills_list) if key_skills_list else None,
+                                recruiter_email=recruiter_email,
+                                recruiter_phone=recruiter_phone,
                                 action="skipped_redirect",
                                 notes="Skipped: Redirects to external company portal",
                             ))
@@ -423,6 +499,13 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                     # 2. External redirect check via CTA button
                     if "company site" in btn_text or "company website" in btn_text or "external" in btn_text:
+                        ext_url = None
+                        try:
+                            ext_url = await apply_btn.evaluate("el => el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-external-url') || ''")
+                        except Exception:
+                            pass
+                        external_apply_url = ext_url if (ext_url and ext_url.startswith("http")) else job_url
+
                         print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal (CTA: '{btn_text}'). Skipping.", flush=True)
                         db.add(models.NaukriBotLog(
                             user_id=user_id,
@@ -430,6 +513,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             company=company,
                             location=job_loc,
                             url=job_url,
+                            external_apply_url=external_apply_url,
+                            key_skills=", ".join(key_skills_list) if key_skills_list else None,
+                            recruiter_email=recruiter_email,
+                            recruiter_phone=recruiter_phone,
                             action="skipped_redirect",
                             notes=f"Skipped: CTA button '{btn_text}' redirects to external company portal",
                         ))
@@ -473,6 +560,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             company=company,
                             location=job_loc,
                             url=job_url,
+                            external_apply_url=job_url,
+                            key_skills=", ".join(key_skills_list) if key_skills_list else None,
+                            recruiter_email=recruiter_email,
+                            recruiter_phone=recruiter_phone,
                             action="skipped_questions",
                             notes="Skipped: Contains custom screening questions",
                         ))
@@ -542,9 +633,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             user_id=user_id,
                             job_id=new_job.id,
                             status=models.ApplicationStatus.applied,
+                            recruiter_email=recruiter_email,
+                            recruiter_phone=recruiter_phone,
                             applied_at=datetime.utcnow(),
                             last_activity_at=datetime.utcnow(),
-                            notes="Auto-applied with profile resume via Naukri Playwright Bot",
+                            notes=f"Auto-applied with profile resume via Naukri Playwright Bot. Skills: {', '.join(key_skills_list[:8]) if key_skills_list else 'N/A'}",
                         )
                         db.add(new_app)
                         db.flush()
@@ -563,6 +656,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             company=company,
                             location=job_loc,
                             url=job_url,
+                            external_apply_url=job_url,
+                            key_skills=", ".join(key_skills_list) if key_skills_list else None,
+                            recruiter_email=recruiter_email,
+                            recruiter_phone=recruiter_phone,
                             action="applied",
                             notes="Successfully applied via 1-click apply",
                         ))

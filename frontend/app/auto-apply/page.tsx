@@ -27,6 +27,11 @@ import {
   Trash2,
   Save,
   Lock,
+  Mail,
+  Phone,
+  Copy,
+  CheckCheck,
+  TrendingUp,
 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -35,6 +40,7 @@ import {
   CandidateProfile,
   NaukriBotConfig,
   NaukriBotLog,
+  SkillsInsightsOut,
 } from "@/lib/api";
 
 export default function AutoApplyPage() {
@@ -51,6 +57,8 @@ function AutoApplyContent() {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [config, setConfig] = useState<NaukriBotConfig | null>(null);
   const [logs, setLogs] = useState<NaukriBotLog[]>([]);
+  const [skillsInsights, setSkillsInsights] = useState<SkillsInsightsOut | null>(null);
+  const [copiedKeywords, setCopiedKeywords] = useState(false);
   const [loading, setLoading] = useState(true);
   const [runningAction, setRunningAction] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -94,6 +102,60 @@ function AutoApplyContent() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Formatting helpers for accurate Time & Location
+  function formatIST(isoDate?: string | null) {
+    if (!isoDate) return "—";
+    const safeIso = isoDate.includes("Z") || /[+-]\d{2}:\d{2}$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+    try {
+      return new Date(safeIso).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+    } catch {
+      return isoDate;
+    }
+  }
+
+  function formatLocation(loc?: string | null) {
+    if (!loc) return "Chennai";
+    if (/\b\d+[-+–]?\d*\s*y(?:ea)?rs?\b/i.test(loc) || /not disclosed/i.test(loc)) {
+      return "Chennai";
+    }
+    return loc;
+  }
+
+  function handleCopyKeywords() {
+    if (!skillsInsights?.top_skills?.length) return;
+    const text = skillsInsights.top_skills.map((s) => s.keyword).join(", ");
+    navigator.clipboard.writeText(text);
+    setCopiedKeywords(true);
+    setTimeout(() => setCopiedKeywords(false), 2500);
+  }
+
+  function handleAddSkillToProfile(skillName: string) {
+    if (!skills.some((s) => s.toLowerCase() === skillName.toLowerCase())) {
+      setSkills((prev) => [...prev, skillName]);
+      setActionMessage({
+        type: "info",
+        text: `Added "${skillName}" to your candidate skills. Click "Save Profile" in the Resume tab to persist.`,
+      });
+    }
+  }
+
+  function handleAddAllMissingSkills(missing: string[]) {
+    const toAdd = missing.filter((m) => !skills.some((s) => s.toLowerCase() === m.toLowerCase()));
+    if (toAdd.length === 0) return;
+    setSkills((prev) => [...prev, ...toAdd]);
+    setActionMessage({
+      type: "success",
+      text: `Added ${toAdd.length} in-demand market skills to your profile! Remember to click "Save Profile" to persist.`,
+    });
+  }
+
   function syncProfileToState(p: CandidateProfile) {
     setProfile(p);
     setFullName(p.full_name || "");
@@ -109,10 +171,11 @@ function AutoApplyContent() {
 
   async function loadData() {
     try {
-      const [p, c, l] = await Promise.all([
+      const [p, c, l, s] = await Promise.all([
         api.get<CandidateProfile | null>("/profile").catch(() => null),
         api.get<NaukriBotConfig>("/naukri-bot/config").catch(() => null),
         api.get<NaukriBotLog[]>("/naukri-bot/logs").catch(() => []),
+        api.get<SkillsInsightsOut>("/naukri-bot/skills-insights").catch(() => null),
       ]);
       if (p) syncProfileToState(p);
       if (c) {
@@ -124,6 +187,7 @@ function AutoApplyContent() {
         setExperienceYears(c.experience_years || 0);
       }
       if (l) setLogs(l);
+      if (s) setSkillsInsights(s);
     } catch (e: any) {
       console.error("Failed to load auto-apply data:", e);
     } finally {
@@ -143,6 +207,7 @@ function AutoApplyContent() {
           setConfig(updated);
           if (updated.status !== "running") {
             api.get<NaukriBotLog[]>("/naukri-bot/logs").then(setLogs);
+            api.get<SkillsInsightsOut>("/naukri-bot/skills-insights").then(setSkillsInsights).catch(() => null);
           }
         });
       }, 8000);
@@ -955,6 +1020,48 @@ function AutoApplyContent() {
                   <Plus size={14} /> Add Skill
                 </button>
               </div>
+
+              {/* JD In-Demand Skill Suggestions */}
+              {skillsInsights && skillsInsights.top_skills.length > 0 && (
+                <div className="pt-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
+                    <span className="font-semibold flex items-center gap-1 text-slate-700">
+                      <TrendingUp size={13} className="text-brand-600" />
+                      In-Demand Keywords from {skillsInsights.total_jobs_analyzed} Scanned Naukri JDs:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyKeywords}
+                      className="text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+                    >
+                      {copiedKeywords ? <CheckCheck size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                      {copiedKeywords ? "Copied!" : "Copy All"}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {skillsInsights.top_skills.slice(0, 15).map((ts, idx) => {
+                      const alreadyHave = skills.some((s) => s.toLowerCase() === ts.keyword.toLowerCase());
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          disabled={alreadyHave}
+                          onClick={() => handleAddSkillToProfile(ts.keyword)}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors flex items-center gap-1 ${
+                            alreadyHave
+                              ? "bg-slate-100 text-slate-400 border-slate-200 cursor-default"
+                              : "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+                          }`}
+                        >
+                          {ts.keyword}
+                          <span className="text-[10px] opacity-75">({ts.count})</span>
+                          {!alreadyHave && <Plus size={11} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Executive Summary */}
@@ -1179,27 +1286,196 @@ function AutoApplyContent() {
         </div>
       )}
 
-      {/* TAB: ACTIVITY AUDIT LOG */}
+      {/* TAB: ACTIVITY AUDIT LOG & MARKET INTEL */}
       {activeTab === "activity" && (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* Market JD Keyword Intelligence Card */}
+          {skillsInsights && skillsInsights.top_skills.length > 0 && (
+            <div className="card p-5 space-y-4 border-l-4 border-l-brand-600">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                    <TrendingUp size={18} className="text-brand-600" />
+                    Market JD Keyword Intelligence ({skillsInsights.total_jobs_analyzed} Job Postings Analyzed)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Aggregated keyword frequencies extracted directly from active Naukri job descriptions.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCopyKeywords}
+                  className="btn btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 self-start md:self-auto"
+                >
+                  {copiedKeywords ? (
+                    <>
+                      <CheckCheck size={14} className="text-emerald-600" />
+                      Copied to Clipboard!
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} />
+                      Copy Keywords for Resume
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Missing In-Demand Skills Banner */}
+              {(() => {
+                const missing = skillsInsights.top_skills
+                  .filter((s) => !skills.some((userSkill) => userSkill.toLowerCase() === s.keyword.toLowerCase()))
+                  .map((s) => s.keyword);
+
+                if (missing.length === 0) return null;
+
+                return (
+                  <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                        <Sparkles size={14} className="text-amber-600" />
+                        In-Demand Skills Missing in Your Profile ({missing.length}):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleAddAllMissingSkills(missing)}
+                        className="text-xs font-semibold text-amber-900 hover:text-amber-950 underline flex items-center gap-1"
+                      >
+                        + Add All Missing to Profile
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {missing.slice(0, 15).map((mSkill, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleAddSkillToProfile(mSkill)}
+                          className="badge bg-white text-amber-900 border border-amber-300 hover:bg-amber-100 text-xs py-1 px-2 flex items-center gap-1 transition-colors"
+                          title="Click to add to your profile"
+                        >
+                          + {mSkill}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Top Skills Cloud */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-semibold text-slate-700">Top Market Skills Frequency:</span>
+                <div className="flex flex-wrap gap-2">
+                  {skillsInsights.top_skills.map((item, idx) => {
+                    const haveIt = skills.some((s) => s.toLowerCase() === item.keyword.toLowerCase());
+                    return (
+                      <span
+                        key={idx}
+                        className={`badge text-xs py-1 px-2.5 flex items-center gap-1.5 ${
+                          haveIt
+                            ? "bg-slate-100 text-slate-800 border border-slate-200"
+                            : "bg-purple-50 text-purple-800 border border-purple-200"
+                        }`}
+                      >
+                        <span className="font-medium">{item.keyword}</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/80 font-bold">
+                          {item.count}
+                        </span>
+                        {!haveIt && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddSkillToProfile(item.keyword)}
+                            className="text-purple-600 hover:text-purple-900 font-bold ml-0.5"
+                            title="Add to skills"
+                          >
+                            +
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Recruiter Contacts Directory Card */}
+          {skillsInsights && skillsInsights.contacts.length > 0 && (
+            <div className="card p-5 space-y-3 border-l-4 border-l-emerald-600">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                    <Mail size={18} className="text-emerald-600" />
+                    Direct Recruiter Contacts Extracted ({skillsInsights.contacts.length})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Hiring manager and recruiter contact info discovered in job descriptions.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                {skillsInsights.contacts.map((contact, idx) => (
+                  <div key={idx} className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 text-xs">
+                    <div>
+                      <div className="font-semibold text-slate-900 truncate">{contact.job_title}</div>
+                      <div className="text-slate-500 font-medium truncate">{contact.company}</div>
+                    </div>
+                    <div className="space-y-1 pt-1 border-t border-slate-200/60 text-slate-700">
+                      {contact.email && (
+                        <div className="flex items-center gap-1.5 truncate">
+                          <Mail size={12} className="text-emerald-600 shrink-0" />
+                          <a href={`mailto:${contact.email}`} className="text-emerald-700 hover:underline truncate">
+                            {contact.email}
+                          </a>
+                        </div>
+                      )}
+                      {contact.phone && (
+                        <div className="flex items-center gap-1.5 truncate">
+                          <Phone size={12} className="text-blue-600 shrink-0" />
+                          <a href={`tel:${contact.phone}`} className="text-blue-700 hover:underline truncate">
+                            {contact.phone}
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                    {contact.url && (
+                      <div className="pt-1">
+                        <a
+                          href={contact.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-brand-600 hover:underline font-medium"
+                        >
+                          View Job Card <ExternalLink size={11} />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Application Audit Trail Card */}
           <div className="card p-5 space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-slate-900">Application Audit Trail</h3>
                 <p className="text-xs text-slate-500">
-                  Every job card inspected by Playwright is recorded with its outcome and reason.
+                  Every job card inspected by Playwright is recorded with its outcome, location, and external apply links.
                 </p>
               </div>
 
               {/* Filter pills */}
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
-                  { id: "all", label: "All" },
-                  { id: "applied", label: "Applied" },
-                  { id: "skipped_redirect", label: "Skipped (Redirects)" },
-                  { id: "skipped_questions", label: "Skipped (Questions)" },
-                  { id: "already_applied", label: "Already Applied" },
-                  { id: "failed", label: "Failed" },
+                  { id: "all", label: `All (${logs.length})` },
+                  { id: "applied", label: `Applied (${logs.filter((l) => l.action === "applied").length})` },
+                  { id: "skipped_redirect", label: `Skipped: External Sites (${logs.filter((l) => l.action === "skipped_redirect").length})` },
+                  { id: "skipped_questions", label: `Skipped: Questions (${logs.filter((l) => l.action === "skipped_questions").length})` },
+                  { id: "already_applied", label: `Already Applied (${logs.filter((l) => l.action === "already_applied").length})` },
+                  { id: "failed", label: `Failed (${logs.filter((l) => l.action === "failed").length})` },
                 ].map((pill) => (
                   <button
                     key={pill.id}
@@ -1215,6 +1491,15 @@ function AutoApplyContent() {
                 ))}
               </div>
             </div>
+
+            {/* Special Callout when viewing Skipped External Sites */}
+            {logFilter === "skipped_redirect" && (
+              <div className="p-3 bg-brand-50/70 border border-brand-200 rounded-xl text-xs text-brand-900 flex items-center justify-between">
+                <span>
+                  💡 <strong>External Portal Jobs:</strong> These jobs redirect to company ATS sites (Workday, Taleo, Greenhouse). Click <strong>&ldquo;Apply on Company Site ↗&rdquo;</strong> to submit directly.
+                </span>
+              </div>
+            )}
 
             {filteredLogs.length === 0 ? (
               <div className="py-12 text-center text-slate-400 space-y-2">
@@ -1232,17 +1517,16 @@ function AutoApplyContent() {
                       <th className="py-2.5 px-3">Time (IST)</th>
                       <th className="py-2.5 px-3">Job Title &amp; Company</th>
                       <th className="py-2.5 px-3">Location</th>
-                      <th className="py-2.5 px-3">Action</th>
-                      <th className="py-2.5 px-3">Details / Reason</th>
+                      <th className="py-2.5 px-3">Action Status</th>
+                      <th className="py-2.5 px-3">Outcome &amp; Direct Apply Link</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredLogs.map((log) => {
-                      const dateStr = new Date(log.created_at).toLocaleString("en-IN", {
-                        timeZone: "Asia/Kolkata",
-                        dateStyle: "short",
-                        timeStyle: "short",
-                      });
+                      const dateStr = formatIST(log.created_at);
+                      const locStr = formatLocation(log.location);
+                      const hasExternalUrl = Boolean(log.external_apply_url || (log.action === "skipped_redirect" && log.url));
+                      const directApplyUrl = log.external_apply_url || log.url;
 
                       return (
                         <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
@@ -1256,19 +1540,60 @@ function AutoApplyContent() {
                                   href={log.url}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="hover:text-brand-600 hover:underline flex items-center gap-1"
+                                  className="hover:text-brand-600 hover:underline flex items-center gap-1 font-semibold"
                                 >
                                   {log.job_title}
-                                  <ExternalLink size={12} className="text-slate-400" />
+                                  <ExternalLink size={12} className="text-slate-400 shrink-0" />
                                 </a>
                               ) : (
-                                log.job_title
+                                <span>{log.job_title}</span>
                               )}
                             </div>
-                            <div className="text-xs text-slate-500">{log.company || "Unknown Company"}</div>
+                            <div className="text-xs text-slate-500 font-normal">{log.company || "Unknown Company"}</div>
+
+                            {/* Key Skills chips */}
+                            {log.key_skills && (
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {log.key_skills.split(",").slice(0, 4).map((sk, sIdx) => (
+                                  <span
+                                    key={sIdx}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-normal"
+                                  >
+                                    {sk.trim()}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Recruiter Contact preview */}
+                            {(log.recruiter_email || log.recruiter_phone) && (
+                              <div className="flex flex-wrap items-center gap-2 mt-1">
+                                {log.recruiter_email && (
+                                  <a
+                                    href={`mailto:${log.recruiter_email}`}
+                                    className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 hover:underline"
+                                  >
+                                    <Mail size={10} />
+                                    {log.recruiter_email}
+                                  </a>
+                                )}
+                                {log.recruiter_phone && (
+                                  <a
+                                    href={`tel:${log.recruiter_phone}`}
+                                    className="inline-flex items-center gap-1 text-[11px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 hover:underline"
+                                  >
+                                    <Phone size={10} />
+                                    {log.recruiter_phone}
+                                  </a>
+                                )}
+                              </div>
+                            )}
                           </td>
-                          <td className="py-3 px-3 text-xs text-slate-600">
-                            {log.location || "Not specified"}
+                          <td className="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">
+                            <span className="flex items-center gap-1">
+                              <MapPin size={12} className="text-slate-400 shrink-0" />
+                              {locStr}
+                            </span>
                           </td>
                           <td className="py-3 px-3 whitespace-nowrap">
                             {log.action === "applied" && (
@@ -1302,8 +1627,27 @@ function AutoApplyContent() {
                               </span>
                             )}
                           </td>
-                          <td className="py-3 px-3 text-xs text-slate-500 max-w-xs truncate" title={log.notes || ""}>
-                            {log.notes || "—"}
+                          <td className="py-3 px-3 text-xs">
+                            {hasExternalUrl ? (
+                              <div className="space-y-1.5">
+                                <a
+                                  href={directApplyUrl || "#"}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded bg-brand-600 text-white hover:bg-brand-700 shadow-sm transition-colors whitespace-nowrap"
+                                >
+                                  <ExternalLink size={11} />
+                                  Apply on Company Site
+                                </a>
+                                <div className="text-[11px] text-slate-500 max-w-xs truncate" title={log.notes || ""}>
+                                  {log.notes || "Redirects to external career portal"}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-slate-600 max-w-xs truncate" title={log.notes || ""}>
+                                {log.notes || "—"}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );

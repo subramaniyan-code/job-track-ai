@@ -304,8 +304,31 @@ export interface NaukriBotLog {
   company: string | null;
   location: string | null;
   url: string | null;
+  external_apply_url?: string | null;
+  key_skills?: string | null;
+  recruiter_email?: string | null;
+  recruiter_phone?: string | null;
   action: string;
   notes: string | null;
   created_at: string;
+}
+
+export interface SkillInsightItem {
+  keyword: string;
+  count: number;
+}
+
+export interface RecruiterContactItem {
+  job_title: string;
+  company: string;
+  email: string | null;
+  phone: string | null;
+  url: string | null;
+}
+
+export interface SkillsInsightsOut {
+  top_skills: SkillInsightItem[];
+  contacts: RecruiterContactItem[];
+  total_jobs_analyzed: number;
 }
 

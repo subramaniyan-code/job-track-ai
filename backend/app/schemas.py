@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_serializer
 
 from .models import Role, ApplicationStatus, FollowUpStatus, ConnectorProvider, EmailInsightType
 
@@ -190,7 +190,6 @@ class ApplicationEventOut(BaseModel):
         from_attributes = True
 
 
-
 # ---------- Follow-ups ----------
 class FollowUpDraftRequest(BaseModel):
     application_id: str
@@ -322,10 +321,25 @@ class NaukriBotLogOut(BaseModel):
     company: Optional[str]
     location: Optional[str]
     url: Optional[str]
+    external_apply_url: Optional[str] = None
+    key_skills: Optional[str] = None
+    recruiter_email: Optional[str] = None
+    recruiter_phone: Optional[str] = None
     action: str
     notes: Optional[str]
     created_at: datetime
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, dt: datetime, _info):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc).isoformat()
+        return dt.isoformat()
+
     class Config:
         from_attributes = True
 
+
+class SkillsInsightsOut(BaseModel):
+    top_skills: list[dict[str, Any]]
+    contacts: list[dict[str, Any]]
+    total_jobs_analyzed: int
