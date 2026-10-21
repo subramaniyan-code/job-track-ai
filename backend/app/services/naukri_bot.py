@@ -14,6 +14,8 @@ from ..security import decrypt_str
 
 log = logging.getLogger("naukri_bot")
 
+_BOT_SESSION_LOCK = asyncio.Lock()
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -71,80 +73,86 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
         db.commit()
         return {"status": "error", "message": msg, "applied": 0}
 
-    # Decrypt session cookies
-    cookies_json_str = decrypt_str(config.session_cookies_encrypted)
-    if not cookies_json_str:
-        msg = "Failed to decrypt Naukri session. Please re-enter your session cookies."
-        config.status = "session_expired"
-        config.status_message = msg
-        db.commit()
-        return {"status": "error", "message": msg, "applied": 0}
+    # Strict concurrency guard: never run multiple Chromium instances concurrently on low-spec server
+    if _BOT_SESSION_LOCK.locked():
+        msg = "A browsing session is already in progress. Preventing duplicate Chrome processes."
+        print(f"[NAUKRI_BOT] {msg}", flush=True)
+        return {"status": "skipped", "message": msg, "applied": 0}
 
-    try:
-        raw_cookies = json.loads(cookies_json_str)
-    except Exception as e:
-        msg = f"Invalid cookie JSON format: {e}"
-        config.status = "error"
-        config.status_message = msg
-        db.commit()
-        return {"status": "error", "message": msg, "applied": 0}
-
-    config.status = "running"
-    config.status_message = "Starting stealth browsing session on Naukri..."
-    db.commit()
-
-    # Parse cookies list or storageState format
-    cookies_to_add = []
-    if isinstance(raw_cookies, dict) and "cookies" in raw_cookies:
-        cookies_to_add = raw_cookies["cookies"]
-    elif isinstance(raw_cookies, list):
-        cookies_to_add = raw_cookies
-
-    # Clean cookie fields for Playwright compatibility
-    valid_cookies = []
-    for c in cookies_to_add:
-        if isinstance(c, dict) and "name" in c and "value" in c:
-            c_name = str(c["name"]).strip()
-            # CRITICAL: Exclude stale Akamai/Cloudflare bot-telemetry cookies!
-            # Akamai generates fresh _abck / bm_* cookies bound to this server's specific IP and TLS profile.
-            # Injecting an _abck cookie exported from another machine/IP triggers an instant Akamai Access Denied block.
-            if c_name in ["_abck", "bm_sz", "bm_sv", "bm_mi", "ak_bmsc", "ak_bmsc_s"]:
-                continue
-
-            domain_val = str(c.get("domain") or ".naukri.com").strip()
-            if "naukri" not in domain_val:
-                continue
-            clean_domain = ".naukri.com" if domain_val.endswith("naukri.com") else (domain_val if domain_val.startswith(".") else f".{domain_val}")
-            clean_c = {
-                "name": c_name,
-                "value": str(c["value"]),
-                "domain": clean_domain,
-                "path": str(c.get("path") or "/"),
-                "secure": bool(c.get("secure", True)),
-                "httpOnly": bool(c.get("httpOnly", False)),
-            }
-            if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
-                clean_c["sameSite"] = c["sameSite"]
-            valid_cookies.append(clean_c)
-
-    print(f"[NAUKRI_BOT] Found {len(valid_cookies)} sanitized Naukri session cookies for user {user_id}", flush=True)
-
-    session_applied_count = 0
-    session_target = min(2, config.daily_max_applications - config.applications_today)
-
-    # Prepare target queries and locations
-    raw_targets = [k.strip() for k in (config.target_keywords or "Cloud & Infrastructure Engineer").split(",") if k.strip()]
-    if not raw_targets:
-        raw_targets = ["Cloud Infrastructure Engineer", "Cloud Engineer"]
-
-    locations = [loc.strip() for loc in (config.target_locations or "Chennai").split(",") if loc.strip()]
-    primary_loc = locations[0] if locations else "Chennai"
-    loc_slug = re.sub(r'[^a-zA-Z0-9]', '', primary_loc.lower())
-
+    await _BOT_SESSION_LOCK.acquire()
     browser = None
+    session_applied_count = 0
+
     try:
+        # Decrypt session cookies
+        cookies_json_str = decrypt_str(config.session_cookies_encrypted)
+        if not cookies_json_str:
+            msg = "Failed to decrypt Naukri session. Please re-enter your session cookies."
+            config.status = "session_expired"
+            config.status_message = msg
+            db.commit()
+            return {"status": "error", "message": msg, "applied": 0}
+
+        try:
+            raw_cookies = json.loads(cookies_json_str)
+        except Exception as e:
+            msg = f"Invalid cookie JSON format: {e}"
+            config.status = "error"
+            config.status_message = msg
+            db.commit()
+            return {"status": "error", "message": msg, "applied": 0}
+
+        config.status = "running"
+        config.status_message = "Starting stealth browsing session on Naukri..."
+        db.commit()
+
+        # Parse cookies list or storageState format
+        cookies_to_add = []
+        if isinstance(raw_cookies, dict) and "cookies" in raw_cookies:
+            cookies_to_add = raw_cookies["cookies"]
+        elif isinstance(raw_cookies, list):
+            cookies_to_add = raw_cookies
+
+        # Clean cookie fields for Playwright compatibility
+        valid_cookies = []
+        for c in cookies_to_add:
+            if isinstance(c, dict) and "name" in c and "value" in c:
+                c_name = str(c["name"]).strip()
+                # Exclude stale Akamai/Cloudflare bot-telemetry cookies bound to previous IP/TLS profiles
+                if c_name in ["_abck", "bm_sz", "bm_sv", "bm_mi", "ak_bmsc", "ak_bmsc_s"]:
+                    continue
+
+                domain_val = str(c.get("domain") or ".naukri.com").strip()
+                if "naukri" not in domain_val:
+                    continue
+                clean_domain = ".naukri.com" if domain_val.endswith("naukri.com") else (domain_val if domain_val.startswith(".") else f".{domain_val}")
+                clean_c = {
+                    "name": c_name,
+                    "value": str(c["value"]),
+                    "domain": clean_domain,
+                    "path": str(c.get("path") or "/"),
+                    "secure": bool(c.get("secure", True)),
+                    "httpOnly": bool(c.get("httpOnly", False)),
+                }
+                if "sameSite" in c and c["sameSite"] in ["Strict", "Lax", "None"]:
+                    clean_c["sameSite"] = c["sameSite"]
+                valid_cookies.append(clean_c)
+
+        print(f"[NAUKRI_BOT] Found {len(valid_cookies)} sanitized Naukri session cookies for user {user_id}", flush=True)
+
+        session_target = min(2, config.daily_max_applications - config.applications_today)
+
+        # Prepare target queries and locations
+        raw_targets = [k.strip() for k in (config.target_keywords or "Cloud & Infrastructure Engineer").split(",") if k.strip()]
+        if not raw_targets:
+            raw_targets = ["Cloud Infrastructure Engineer", "Cloud Engineer"]
+
+        locations = [loc.strip() for loc in (config.target_locations or "Chennai").split(",") if loc.strip()]
+        primary_loc = locations[0] if locations else "Chennai"
+        loc_slug = re.sub(r'[^a-zA-Z0-9]', '', primary_loc.lower())
+
         async with async_playwright() as p:
-            print("[NAUKRI_BOT] Launching stealth Chromium instance inside Docker...", flush=True)
+            print("[NAUKRI_BOT] Launching stealth lightweight Chromium inside Docker...", flush=True)
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -152,16 +160,22 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
-                    "--disable-infobars",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--no-zygote",
-                    "--window-size=1920,1080",
+                    "--renderer-process-limit=1",
+                    "--js-flags=--max-old-space-size=256",
+                    "--window-size=1440,900",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--disable-default-apps",
+                    "--mute-audio",
+                    "--no-first-run",
                 ],
             )
             context = await browser.new_context(
                 user_agent=DEFAULT_USER_AGENT,
-                viewport={"width": 1920, "height": 1080},
+                viewport={"width": 1440, "height": 900},
                 locale="en-US",
                 timezone_id="Asia/Kolkata",
                 extra_http_headers={
@@ -172,7 +186,26 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 },
             )
 
-            # Mask webdriver cleanly without corrupting native browser prototypes
+            # Block heavy media, fonts, and tracking scripts to keep memory under 150MB on 1GB VPS
+            _blocked_resources = re.compile(
+                r"(\.(png|jpg|jpeg|gif|webp|svg|woff|woff2|ttf|eot|ico|mp4|webm|avi|mp3|wav)(\?.*)?$)|("
+                r"google-analytics|googletagmanager|doubleclick|youtube|boomerang|facebook|hotjar|newrelic|criteo|adnxs|clarity\.ms)",
+                re.IGNORECASE,
+            )
+
+            async def _intercept_lightweight(route):
+                try:
+                    req = route.request
+                    if req.resource_type in ["image", "media", "font"] or _blocked_resources.search(req.url):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
+
+            await context.route("**/*", _intercept_lightweight)
+
+            # Mask webdriver cleanly
             await context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                 if (!window.chrome) {
@@ -186,7 +219,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 }
             """)
 
-            # Inject session cookies individually so invalid entries don't block the rest
+            # Inject session cookies
             added_count = 0
             for c in valid_cookies:
                 try:
@@ -198,7 +231,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
             page = await context.new_page()
 
-            # Warm up session on homepage so Akamai validates the browser before searching
+            # Warm up session on homepage so Akamai validates the browser
             print("[NAUKRI_BOT] Warming up session at https://www.naukri.com...", flush=True)
             try:
                 resp = await page.goto("https://www.naukri.com", wait_until="load", timeout=35000)
@@ -210,10 +243,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 warmup_title = await page.title()
                 warmup_html = await page.content()
                 print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}' (HTTP {resp.status if resp else 'N/A'}, {len(warmup_html)} bytes)", flush=True)
-                if len(warmup_html) < 2000:
-                    print(f"[NAUKRI_BOT] Warmup HTML: {warmup_html[:300].replace(chr(10), ' ')}", flush=True)
 
-                # Check if logged in via user drawer or profile
                 logged_in = await page.query_selector(".nI-gNb-drawer__user-name, [class*='user-name'], a[href*='mnjuser/profile']")
                 if logged_in:
                     print(f"[NAUKRI_BOT] Authenticated as: '{(await logged_in.inner_text()).strip()}'", flush=True)
@@ -254,7 +284,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                     await _human_delay(2, 4)
 
-                    # Check if redirected to login page
                     current_url = page.url.lower()
                     if "nlogin/login" in current_url:
                         msg = "Naukri session has expired or requires fresh cookies. Please re-enter session cookies."
@@ -289,11 +318,10 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         pass
 
                     await _smooth_scroll(page)
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
 
                     job_cards = await page.query_selector_all(combined_selector)
 
-                    # Fallback: inspect any job listings links
                     if not job_cards:
                         job_cards = await page.query_selector_all("a[href*='/job-listings-'], a[href*='-job-details-']")
 
@@ -307,7 +335,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         break
                     else:
                         raw_html = await page.content()
-                        snippet = raw_html[:350].replace("\n", " ").replace("\r", " ")
+                        snippet = raw_html[:350].replace('\n', ' ').replace('\r', ' ')
                         print(f"[NAUKRI_BOT] No cards on this URL. Raw HTML: {snippet}", flush=True)
 
             inspected_count = 0
@@ -316,6 +344,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     break
 
                 inspected_count += 1
+                detail_page = None
                 try:
                     tag_name = await card.evaluate("el => el.tagName.toLowerCase()")
                     if tag_name == "a":
@@ -358,7 +387,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         print(f"[NAUKRI_BOT] Already applied to '{job_title}' at '{company}' in DB. Skipping.", flush=True)
                         continue
 
-                    # Open job details in a new page/tab or navigate
+                    # Open job details in a new page/tab
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
                     detail_page = await context.new_page()
                     await detail_page.goto(job_url, referer=page.url, wait_until="load", timeout=35000)
@@ -369,19 +398,17 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         )
                     except Exception:
                         pass
-                    await _human_delay(3, 5)
+                    await _human_delay(2, 4)
                     await _smooth_scroll(detail_page)
 
                     detail_content = await detail_page.content()
 
-                    # 1. Check for "Already Applied"
+                    # 1. Check for 'Already Applied'
                     if "already applied" in detail_content.lower():
                         print(f"[NAUKRI_BOT] Job '{job_title}' at '{company}' was already applied. Skipping.", flush=True)
-                        await detail_page.close()
                         continue
 
-                    # 2. Check for "Apply on Company Site" (External Redirect)
-                    # We strictly skip company site redirects as requested
+                    # 2. Check for 'Apply on Company Site' (External Redirect) - strictly skip
                     company_site_btn = await detail_page.query_selector(
                         "button[id*='company-site'], [class*='company-site'], a:has-text('Apply on company site'), a:has-text('Apply on Company Website')"
                     )
@@ -403,7 +430,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             notes="Skipped: Redirects to external company portal",
                         ))
                         db.commit()
-                        await detail_page.close()
                         await _human_delay(2, 4)
                         continue
 
@@ -411,7 +437,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     apply_btn = await detail_page.query_selector("#apply-button, button.apply-button, button:has-text('Apply')")
                     if not apply_btn:
                         print(f"[NAUKRI_BOT] No direct apply button found for '{job_title}'. Skipping.", flush=True)
-                        await detail_page.close()
                         continue
 
                     # Click Apply
@@ -421,7 +446,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     except Exception as click_err:
                         print(f"[NAUKRI_BOT] Note on apply click: {click_err}", flush=True)
 
-                    # Allow any post-click navigation/redirect to settle
+                    # Allow post-click navigation/state to settle
                     try:
                         await detail_page.wait_for_load_state("load", timeout=8000)
                     except Exception:
@@ -429,7 +454,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     await _human_delay(2, 4)
 
                     # 4. Check for Questionnaires / Custom inputs
-                    # If a modal appears with mandatory question inputs or textareas, skip!
                     modal_questions = []
                     try:
                         modal_questions = await detail_page.query_selector_all(
@@ -456,7 +480,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             notes="Skipped: Contains custom screening questions",
                         ))
                         db.commit()
-                        await detail_page.close()
                         await _human_delay(2, 4)
                         continue
 
@@ -470,11 +493,31 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     except Exception:
                         pass
 
+                    success_phrases = [
+                        "applied successfully",
+                        "application sent",
+                        "successfully applied",
+                        "application submitted",
+                        "application successful",
+                        "you have applied",
+                        "your application has been sent",
+                    ]
+                    post_lower = post_content.lower()
+                    has_phrase = any(p in post_lower for p in success_phrases)
+
+                    button_applied = False
+                    try:
+                        btn_el = await detail_page.query_selector("button.apply-button, #apply-button, button[class*='applied']")
+                        if btn_el:
+                            btn_text = (await btn_el.inner_text()).strip().lower()
+                            if "applied" in btn_text:
+                                button_applied = True
+                    except Exception:
+                        pass
+
                     applied_success = (
-                        any(
-                            s in post_content.lower()
-                            for s in ["applied successfully", "application sent", "applied", "you have applied", "application successful"]
-                        )
+                        has_phrase
+                        or button_applied
                         or "apply/success" in post_url
                         or "success" in post_url
                     )
@@ -528,17 +571,17 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         ))
                         db.commit()
 
-                    await detail_page.close()
-                    await _human_delay(8, 16)  # Human reading pause between applications
+                        await _human_delay(6, 12)
 
                 except Exception as card_err:
                     print(f"[NAUKRI_BOT] Error inspecting card #{inspected_count}: {card_err}", flush=True)
-                    try:
-                        if 'detail_page' in locals() and not detail_page.is_closed():
-                            await detail_page.close()
-                    except Exception:
-                        pass
                     continue
+                finally:
+                    if detail_page and not detail_page.is_closed():
+                        try:
+                            await detail_page.close()
+                        except Exception:
+                            pass
 
             # Update final session state
             config.last_run_at = datetime.utcnow()
@@ -567,5 +610,13 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
         return {"status": "error", "message": str(e), "applied": session_applied_count}
     finally:
         if browser:
-            await browser.close()
+            try:
+                await browser.close()
+            except Exception:
+                pass
             print("[NAUKRI_BOT] Playwright Chromium browser closed. Memory freed.", flush=True)
+        if config.status == "running":
+            config.status = "idle"
+            db.commit()
+        if _BOT_SESSION_LOCK.locked():
+            _BOT_SESSION_LOCK.release()

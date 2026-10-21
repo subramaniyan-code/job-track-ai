@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -6,7 +7,7 @@ from .. import models, schemas
 from ..database import get_db, SessionLocal
 from ..deps import get_current_user
 from ..security import encrypt_str
-from ..services.naukri_bot import run_naukri_auto_apply_session
+from ..services.naukri_bot import run_naukri_auto_apply_session, _BOT_SESSION_LOCK
 
 router = APIRouter(prefix="/naukri-bot", tags=["naukri-bot"])
 
@@ -115,10 +116,16 @@ async def trigger_naukri_run_now(
         )
 
     if cfg.status == "running":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "A browsing session is already in progress. Please wait for it to finish.",
-        )
+        # Check if the lock is actually free or the status is stale (> 5 minutes old)
+        is_stale = not cfg.updated_at or (datetime.utcnow() - cfg.updated_at).total_seconds() > 300
+        if is_stale and not _BOT_SESSION_LOCK.locked():
+            cfg.status = "idle"
+            db.commit()
+        else:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "A browsing session is already in progress. Please wait for it to finish.",
+            )
 
     # Run in background task to avoid blocking the HTTP request
     async def _run_job():
