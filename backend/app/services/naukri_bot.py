@@ -169,7 +169,6 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
-                    "upgrade-insecure-requests": "1",
                 },
             )
 
@@ -355,6 +354,9 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         models.Job.title == job_title,
                         models.Job.company == company,
                     ).first()
+                    if already_applied:
+                        print(f"[NAUKRI_BOT] Already applied to '{job_title}' at '{company}' in DB. Skipping.", flush=True)
+                        continue
 
                     # Open job details in a new page/tab or navigate
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
