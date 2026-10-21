@@ -247,11 +247,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 print(f"[NAUKRI_BOT] Homepage warmup note: {e}", flush=True)
 
             # Discover job listings across configured target roles
-            job_cards = []
+            extracted_jobs = []
             active_target_role = raw_targets[0]
 
             for raw_kw in raw_targets:
-                if job_cards:
+                if extracted_jobs:
                     break
 
                 clean_kw = re.sub(r'[^a-zA-Z0-9\s-]', ' ', raw_kw).strip()
@@ -289,39 +289,60 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         db.commit()
                         return {"status": "session_expired", "message": msg, "applied": 0}
 
-                    # Wait for Next.js hydration and job tuples to mount
-                    card_selectors = [
-                        "div.cust-job-tuple",
-                        "div.srp-tuple",
-                        "div[class*='cust-job-tuple']",
-                        "div[class*='srp-tuple']",
-                        "div[class*='styles_fcs__tuple']",
-                        "div[class*='styles_fcs__reg-tuple']",
-                        ".srp-jobtuple-wrapper",
-                        "article.jobTuple",
-                        "div[data-job-id]",
-                    ]
-                    combined_selector = ", ".join(card_selectors)
-
+                    # Wait for job listing links to appear
                     try:
-                        await page.wait_for_selector(combined_selector, timeout=10000)
+                        await page.wait_for_selector("a[href*='job-listings'], div[class*='tuple']", timeout=10000)
                     except Exception:
                         pass
 
                     await _smooth_scroll(page)
                     await asyncio.sleep(1.5)
 
-                    job_cards = await page.query_selector_all(combined_selector)
+                    # Extract all unique job listings directly via in-memory JavaScript
+                    extracted_jobs = await page.evaluate("""() => {
+                        const jobs = [];
+                        const seenHrefs = new Set();
+                        const links = document.querySelectorAll('a[href*="job-listings"], a[class*="title"][href*="-jobs-"]');
 
-                    if not job_cards:
-                        job_cards = await page.query_selector_all("a[href*='/job-listings-'], a[href*='-job-details-']")
+                        for (const link of links) {
+                            const rawHref = link.getAttribute('href') || '';
+                            if (!rawHref || seenHrefs.has(rawHref)) continue;
+                            if (rawHref.includes('all-jobs') || rawHref.includes('browse-jobs') || rawHref.includes('jobs-by-')) continue;
+                            seenHrefs.add(rawHref);
+
+                            const fullUrl = rawHref.startsWith('http') ? rawHref : `https://www.naukri.com${rawHref.startsWith('/') ? '' : '/'}${rawHref}`;
+
+                            // Find parent tuple wrapper
+                            const card = link.closest('div[class*="tuple"], .srp-jobtuple-wrapper, article, div[data-job-id]') || link.parentElement;
+
+                            const title = (link.innerText || link.textContent || '').trim();
+                            let company = 'Hiring Company';
+                            let location = 'Chennai';
+
+                            if (card) {
+                                const compEl = card.querySelector('a.comp-name, [class*="comp-name"], [class*="compName"], [class*="company"], [class*="subTitle"]');
+                                if (compEl) {
+                                    company = (compEl.innerText || compEl.textContent || '').trim();
+                                }
+                                const locEl = card.querySelector('.loc-wrap, [class*="location"], [class*="locWdl"], [class*="row3"] span');
+                                if (locEl) {
+                                    location = (locEl.innerText || locEl.textContent || '').trim();
+                                }
+                            }
+
+                            if (title && fullUrl) {
+                                jobs.push({ title, company, location, url: fullUrl });
+                            }
+                        }
+                        return jobs;
+                    }""")
 
                     page_title = await page.title()
                     html_len = len(await page.content())
                     print(f"[NAUKRI_BOT] Page Title: '{page_title}' | URL: {page.url} | HTML size: {html_len} bytes", flush=True)
-                    print(f"[NAUKRI_BOT] Found {len(job_cards)} job cards on search page", flush=True)
+                    print(f"[NAUKRI_BOT] Found {len(extracted_jobs)} unique job listings on search page", flush=True)
 
-                    if job_cards:
+                    if extracted_jobs:
                         active_target_role = clean_kw
                         break
                     else:
@@ -329,65 +350,36 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         snippet = raw_html[:350].replace('\n', ' ').replace('\r', ' ')
                         print(f"[NAUKRI_BOT] No cards on this URL. Raw HTML: {snippet}", flush=True)
 
-            seen_urls = set()
             inspected_count = 0
-            for card in job_cards:
+            for job in extracted_jobs:
                 if session_applied_count >= session_target:
                     break
 
+                job_title = job.get("title") or active_target_role
+                company = job.get("company") or "Hiring Company"
+                job_loc = job.get("location") or primary_loc
+                job_url = job.get("url") or page.url
+
+                # Check if already applied or tracked in DB
+                already_applied = db.query(models.Application).join(models.Job).filter(
+                    models.Application.user_id == user_id,
+                    models.Job.title == job_title,
+                    models.Job.company == company,
+                ).first()
+                if already_applied:
+                    print(f"[NAUKRI_BOT] Already applied to '{job_title}' at '{company}' in DB. Skipping.", flush=True)
+                    continue
+
+                inspected_count += 1
                 detail_page = None
                 try:
-                    # Fast in-memory JS extraction with zero locator timeout risk
-                    card_data = await card.evaluate("""el => {
-                        const isLink = el.tagName.toLowerCase() === 'a';
-                        const titleEl = isLink ? el : el.querySelector("a.title, a[class*='title'], a[href*='job-listings'], [class*='row1'] a, [class*='title'] a, h2 a, h3 a");
-                        const compEl = el.querySelector("a.comp-name, a[class*='comp-name'], [class*='company'], [class*='compName'], [class*='row2'] a, [class*='subTitle']");
-                        const locEl = el.querySelector(".loc-wrap, [class*='location'], [class*='locWdl'], [class*='locIcon'] ~ *, [class*='row3'] span");
-
-                        return {
-                            title: titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '',
-                            url: titleEl ? (titleEl.getAttribute('href') || '') : '',
-                            company: compEl ? (compEl.innerText || compEl.textContent || '').trim() : 'Hiring Company',
-                            location: locEl ? (locEl.innerText || locEl.textContent || '').trim() : ''
-                        };
-                    }""")
-
-                    job_title = card_data.get("title") or active_target_role
-                    company = card_data.get("company") or "Hiring Company"
-                    job_loc = card_data.get("location") or primary_loc
-
-                    raw_href = card_data.get("url") or ""
-                    if raw_href.startswith("http"):
-                        job_url = raw_href
-                    elif raw_href:
-                        job_url = f"https://www.naukri.com{raw_href}"
-                    else:
-                        job_url = page.url
-
-                    # Deduplicate job cards
-                    if not job_url or job_url in seen_urls:
-                        continue
-                    seen_urls.add(job_url)
-
-                    # Check if already applied or tracked in DB
-                    already_applied = db.query(models.Application).join(models.Job).filter(
-                        models.Application.user_id == user_id,
-                        models.Job.title == job_title,
-                        models.Job.company == company,
-                    ).first()
-                    if already_applied:
-                        print(f"[NAUKRI_BOT] Already applied to '{job_title}' at '{company}' in DB. Skipping.", flush=True)
-                        continue
-
-                    inspected_count += 1
-
                     # Open job details in a new page/tab
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
                     detail_page = await context.new_page()
                     await detail_page.goto(job_url, referer=page.url, wait_until="domcontentloaded", timeout=25000)
                     try:
                         await detail_page.wait_for_selector(
-                            "#apply-button, button.apply-button, button:has-text('Apply'), [id*='apply-button'], [class*='apply-button'], [class*='company-site']",
+                            "#apply-button, button.apply-button, [id*='apply-button'], [class*='apply-button'], button:has-text('Apply'), a:has-text('Apply')",
                             timeout=6000,
                         )
                     except Exception:
