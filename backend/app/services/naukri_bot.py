@@ -15,7 +15,7 @@ from ..security import decrypt_str
 log = logging.getLogger("naukri_bot")
 
 DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/130.0.0.0 Safari/537.36"
 )
@@ -167,7 +167,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     "Accept-Language": "en-US,en;q=0.9",
                     "Sec-Ch-Ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
                     "Sec-Ch-Ua-Mobile": "?0",
-                    "Sec-Ch-Ua-Platform": '"Linux"',
+                    "Sec-Ch-Ua-Platform": '"Windows"',
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
@@ -208,7 +208,15 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     pass
                 await _human_delay(2, 4)
                 warmup_title = await page.title()
-                print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}' (HTTP {resp.status if resp else 'N/A'})", flush=True)
+                warmup_html = await page.content()
+                print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}' (HTTP {resp.status if resp else 'N/A'}, {len(warmup_html)} bytes)", flush=True)
+                if len(warmup_html) < 2000:
+                    print(f"[NAUKRI_BOT] Warmup HTML: {warmup_html[:300].replace(chr(10), ' ')}", flush=True)
+
+                # Check if logged in via user drawer or profile
+                logged_in = await page.query_selector(".nI-gNb-drawer__user-name, [class*='user-name'], a[href*='mnjuser/profile']")
+                if logged_in:
+                    print(f"[NAUKRI_BOT] Authenticated as: '{(await logged_in.inner_text()).strip()}'", flush=True)
             except Exception as e:
                 print(f"[NAUKRI_BOT] Homepage warmup note: {e}", flush=True)
 
@@ -294,8 +302,9 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         active_target_role = clean_kw
                         break
                     else:
-                        snippet = (await page.inner_text("body"))[:200].replace("\n", " ") if await page.query_selector("body") else ""
-                        print(f"[NAUKRI_BOT] No cards on this URL. Snippet: {snippet}", flush=True)
+                        raw_html = await page.content()
+                        snippet = raw_html[:350].replace("\n", " ").replace("\r", " ")
+                        print(f"[NAUKRI_BOT] No cards on this URL. Raw HTML: {snippet}", flush=True)
 
             inspected_count = 0
             for card in job_cards[:15]:
