@@ -295,16 +295,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         "div.srp-tuple",
                         "div[class*='cust-job-tuple']",
                         "div[class*='srp-tuple']",
-                        "div[class*='tuple-wrap']",
                         "div[class*='styles_fcs__tuple']",
                         "div[class*='styles_fcs__reg-tuple']",
                         ".srp-jobtuple-wrapper",
                         "article.jobTuple",
                         "div[data-job-id]",
-                        "div[data-jobid]",
-                        "div[data-tuple-id]",
-                        "a[class*='title'][href*='job-listings']",
-                        "a[href*='-jobs-'][class*='title']",
                     ]
                     combined_selector = ", ".join(card_selectors)
 
@@ -334,12 +329,12 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         snippet = raw_html[:350].replace('\n', ' ').replace('\r', ' ')
                         print(f"[NAUKRI_BOT] No cards on this URL. Raw HTML: {snippet}", flush=True)
 
+            seen_urls = set()
             inspected_count = 0
-            for card in job_cards[:15]:
+            for card in job_cards:
                 if session_applied_count >= session_target:
                     break
 
-                inspected_count += 1
                 detail_page = None
                 try:
                     # Fast in-memory JS extraction with zero locator timeout risk
@@ -369,6 +364,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     else:
                         job_url = page.url
 
+                    # Deduplicate job cards
+                    if not job_url or job_url in seen_urls:
+                        continue
+                    seen_urls.add(job_url)
+
                     # Check if already applied or tracked in DB
                     already_applied = db.query(models.Application).join(models.Job).filter(
                         models.Application.user_id == user_id,
@@ -378,6 +378,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     if already_applied:
                         print(f"[NAUKRI_BOT] Already applied to '{job_title}' at '{company}' in DB. Skipping.", flush=True)
                         continue
+
+                    inspected_count += 1
 
                     # Open job details in a new page/tab
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
@@ -393,25 +395,43 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     await _human_delay(2, 3)
                     await _smooth_scroll(detail_page)
 
-                    detail_content = await detail_page.content()
+                    # Check for direct apply button vs external redirect CTA button
+                    apply_btn = await detail_page.query_selector(
+                        "#apply-button, button.apply-button, [id*='apply-button'], [class*='apply-button'], button:has-text('Apply'), a:has-text('Apply')"
+                    )
 
-                    # 1. Check for 'Already Applied'
-                    if "already applied" in detail_content.lower():
+                    if not apply_btn:
+                        ext_btn = await detail_page.query_selector(
+                            "button[id*='company-site'], [class*='company-site'], a:has-text('Apply on company site'), a:has-text('Apply on Company Website')"
+                        )
+                        if ext_btn:
+                            print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal. Skipping.", flush=True)
+                            db.add(models.NaukriBotLog(
+                                user_id=user_id,
+                                job_title=job_title,
+                                company=company,
+                                location=job_loc,
+                                url=job_url,
+                                action="skipped_redirect",
+                                notes="Skipped: Redirects to external company portal",
+                            ))
+                            db.commit()
+                        else:
+                            print(f"[NAUKRI_BOT] No apply button found for '{job_title}'. Skipping.", flush=True)
+                        continue
+
+                    # Evaluate CTA button text in-memory
+                    btn_text = await apply_btn.evaluate("el => (el.innerText || el.textContent || '').trim().toLowerCase()")
+                    print(f"[NAUKRI_BOT] Found apply CTA button: '{btn_text}'", flush=True)
+
+                    # 1. Already Applied check
+                    if "already applied" in btn_text:
                         print(f"[NAUKRI_BOT] Job '{job_title}' at '{company}' was already applied. Skipping.", flush=True)
                         continue
 
-                    # 2. Check for 'Apply on Company Site' (External Redirect) - strictly skip
-                    company_site_btn = await detail_page.query_selector(
-                        "button[id*='company-site'], [class*='company-site'], a:has-text('Apply on company site'), a:has-text('Apply on Company Website')"
-                    )
-                    has_redirect_text = False
-                    for txt in ["apply on company site", "apply on company website", "company site", "external site"]:
-                        if txt in detail_content.lower():
-                            has_redirect_text = True
-                            break
-
-                    if company_site_btn or has_redirect_text:
-                        print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal. Skipping.", flush=True)
+                    # 2. External redirect check via CTA button
+                    if "company site" in btn_text or "company website" in btn_text or "external" in btn_text:
+                        print(f"[NAUKRI_BOT] Job '{job_title}' redirects to external company portal (CTA: '{btn_text}'). Skipping.", flush=True)
                         db.add(models.NaukriBotLog(
                             user_id=user_id,
                             job_title=job_title,
@@ -419,20 +439,13 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             location=job_loc,
                             url=job_url,
                             action="skipped_redirect",
-                            notes="Skipped: Redirects to external company portal",
+                            notes=f"Skipped: CTA button '{btn_text}' redirects to external company portal",
                         ))
                         db.commit()
-                        await _human_delay(2, 3)
                         continue
 
-                    # 3. Look for direct apply button
-                    apply_btn = await detail_page.query_selector("#apply-button, button.apply-button, button:has-text('Apply')")
-                    if not apply_btn:
-                        print(f"[NAUKRI_BOT] No direct apply button found for '{job_title}'. Skipping.", flush=True)
-                        continue
-
-                    # Click Apply
-                    print(f"[NAUKRI_BOT] Direct apply button found! Clicking Apply for '{job_title}' at '{company}'...", flush=True)
+                    # 3. Direct 1-click apply confirmed!
+                    print(f"[NAUKRI_BOT] Direct 1-click apply button confirmed! Clicking Apply for '{job_title}' at '{company}'...", flush=True)
                     try:
                         await apply_btn.click()
                     except Exception as click_err:
@@ -501,8 +514,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     try:
                         btn_el = await detail_page.query_selector("button.apply-button, #apply-button, button[class*='applied']")
                         if btn_el:
-                            btn_text = (await btn_el.inner_text()).strip().lower()
-                            if "applied" in btn_text:
+                            btn_t = await btn_el.evaluate("el => (el.innerText || el.textContent || '').trim().toLowerCase()")
+                            if "applied" in btn_t:
                                 button_applied = True
                     except Exception:
                         pass
@@ -566,7 +579,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         await _human_delay(5, 10)
 
                 except Exception as card_err:
-                    print(f"[NAUKRI_BOT] Error inspecting card #{inspected_count}: {card_err}", flush=True)
+                    print(f"[NAUKRI_BOT] Error inspecting card: {card_err}", flush=True)
                     continue
                 finally:
                     if detail_page and not detail_page.is_closed():
