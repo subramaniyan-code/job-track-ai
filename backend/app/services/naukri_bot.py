@@ -23,7 +23,7 @@ DEFAULT_USER_AGENT = (
 )
 
 
-async def _human_delay(min_sec: float = 4.0, max_sec: float = 12.0):
+async def _human_delay(min_sec: float = 3.0, max_sec: float = 8.0):
     """Randomized human-like pause between browser actions."""
     delay = random.uniform(min_sec, max_sec)
     await asyncio.sleep(delay)
@@ -34,10 +34,10 @@ async def _smooth_scroll(page):
     for _ in range(random.randint(2, 4)):
         scroll_amount = random.randint(250, 500)
         await page.mouse.wheel(0, scroll_amount)
-        await asyncio.sleep(random.uniform(1.2, 2.5))
+        await asyncio.sleep(random.uniform(0.8, 1.8))
     # Small scroll up
     await page.mouse.wheel(0, -random.randint(80, 200))
-    await asyncio.sleep(random.uniform(1.0, 2.0))
+    await asyncio.sleep(random.uniform(0.6, 1.2))
 
 
 async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotConfig) -> dict[str, Any]:
@@ -186,7 +186,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 },
             )
 
-            # Block heavy media, fonts, and tracking scripts to keep memory under 150MB on 1GB VPS
+            # Block heavy media, fonts, audio, video & trackers to keep RAM under 150MB
             _blocked_resources = re.compile(
                 r"(\.(png|jpg|jpeg|gif|webp|svg|woff|woff2|ttf|eot|ico|mp4|webm|avi|mp3|wav)(\?.*)?$)|("
                 r"google-analytics|googletagmanager|doubleclick|youtube|boomerang|facebook|hotjar|newrelic|criteo|adnxs|clarity\.ms)",
@@ -234,12 +234,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             # Warm up session on homepage so Akamai validates the browser
             print("[NAUKRI_BOT] Warming up session at https://www.naukri.com...", flush=True)
             try:
-                resp = await page.goto("https://www.naukri.com", wait_until="load", timeout=35000)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=8000)
-                except Exception:
-                    pass
-                await _human_delay(2, 4)
+                resp = await page.goto("https://www.naukri.com", wait_until="domcontentloaded", timeout=25000)
+                await _human_delay(2, 3)
                 warmup_title = await page.title()
                 warmup_html = await page.content()
                 print(f"[NAUKRI_BOT] Homepage warmup loaded: '{warmup_title}' (HTTP {resp.status if resp else 'N/A'}, {len(warmup_html)} bytes)", flush=True)
@@ -277,12 +273,12 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 for search_url in candidate_urls:
                     print(f"[NAUKRI_BOT] Trying search target: '{clean_kw}' in '{primary_loc}' -> {search_url}", flush=True)
                     try:
-                        await page.goto(search_url, wait_until="load", timeout=45000)
+                        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                     except Exception as goto_err:
                         print(f"[NAUKRI_BOT] Navigation failed for {search_url}: {goto_err}", flush=True)
                         continue
 
-                    await _human_delay(2, 4)
+                    await _human_delay(2, 3)
 
                     current_url = page.url.lower()
                     if "nlogin/login" in current_url:
@@ -313,12 +309,12 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     combined_selector = ", ".join(card_selectors)
 
                     try:
-                        await page.wait_for_selector(combined_selector, timeout=12000)
+                        await page.wait_for_selector(combined_selector, timeout=10000)
                     except Exception:
                         pass
 
                     await _smooth_scroll(page)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1.5)
 
                     job_cards = await page.query_selector_all(combined_selector)
 
@@ -346,34 +342,30 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                 inspected_count += 1
                 detail_page = None
                 try:
-                    tag_name = await card.evaluate("el => el.tagName.toLowerCase()")
-                    if tag_name == "a":
-                        title_elem = card
-                        comp_elem = None
-                        loc_elem = None
-                    else:
-                        title_elem = await card.query_selector(
-                            "a.title, a[class*='title'], a[href*='job-listings'], [class*='row1'] a, [class*='title'] a, h2 a, h3 a"
-                        )
-                        comp_elem = await card.query_selector(
-                            "a.comp-name, a[class*='comp-name'], [class*='company'], [class*='compName'], [class*='row2'] a, [class*='subTitle']"
-                        )
-                        loc_elem = await card.query_selector(
-                            ".loc-wrap, [class*='location'], [class*='locWdl'], [class*='locIcon'] ~ *, [class*='row3'] span"
-                        )
+                    # Fast in-memory JS extraction with zero locator timeout risk
+                    card_data = await card.evaluate("""el => {
+                        const isLink = el.tagName.toLowerCase() === 'a';
+                        const titleEl = isLink ? el : el.querySelector("a.title, a[class*='title'], a[href*='job-listings'], [class*='row1'] a, [class*='title'] a, h2 a, h3 a");
+                        const compEl = el.querySelector("a.comp-name, a[class*='comp-name'], [class*='company'], [class*='compName'], [class*='row2'] a, [class*='subTitle']");
+                        const locEl = el.querySelector(".loc-wrap, [class*='location'], [class*='locWdl'], [class*='locIcon'] ~ *, [class*='row3'] span");
 
-                    job_title = (await title_elem.inner_text()).strip() if title_elem else active_target_role
-                    company = (await comp_elem.inner_text()).strip() if comp_elem else "Hiring Company"
-                    job_loc = (await loc_elem.inner_text()).strip() if loc_elem else primary_loc
+                        return {
+                            title: titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '',
+                            url: titleEl ? (titleEl.getAttribute('href') || '') : '',
+                            company: compEl ? (compEl.innerText || compEl.textContent || '').trim() : 'Hiring Company',
+                            location: locEl ? (locEl.innerText || locEl.textContent || '').trim() : ''
+                        };
+                    }""")
 
-                    if title_elem:
-                        raw_href = (await title_elem.get_attribute("href")) or ""
-                        if raw_href.startswith("http"):
-                            job_url = raw_href
-                        elif raw_href:
-                            job_url = f"https://www.naukri.com{raw_href}"
-                        else:
-                            job_url = page.url
+                    job_title = card_data.get("title") or active_target_role
+                    company = card_data.get("company") or "Hiring Company"
+                    job_loc = card_data.get("location") or primary_loc
+
+                    raw_href = card_data.get("url") or ""
+                    if raw_href.startswith("http"):
+                        job_url = raw_href
+                    elif raw_href:
+                        job_url = f"https://www.naukri.com{raw_href}"
                     else:
                         job_url = page.url
 
@@ -390,15 +382,15 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     # Open job details in a new page/tab
                     print(f"[NAUKRI_BOT] Inspecting job #{inspected_count}: '{job_title}' at '{company}'", flush=True)
                     detail_page = await context.new_page()
-                    await detail_page.goto(job_url, referer=page.url, wait_until="load", timeout=35000)
+                    await detail_page.goto(job_url, referer=page.url, wait_until="domcontentloaded", timeout=25000)
                     try:
                         await detail_page.wait_for_selector(
                             "#apply-button, button.apply-button, button:has-text('Apply'), [id*='apply-button'], [class*='apply-button'], [class*='company-site']",
-                            timeout=8000,
+                            timeout=6000,
                         )
                     except Exception:
                         pass
-                    await _human_delay(2, 4)
+                    await _human_delay(2, 3)
                     await _smooth_scroll(detail_page)
 
                     detail_content = await detail_page.content()
@@ -430,7 +422,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             notes="Skipped: Redirects to external company portal",
                         ))
                         db.commit()
-                        await _human_delay(2, 4)
+                        await _human_delay(2, 3)
                         continue
 
                     # 3. Look for direct apply button
@@ -446,9 +438,9 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     except Exception as click_err:
                         print(f"[NAUKRI_BOT] Note on apply click: {click_err}", flush=True)
 
-                    # Allow post-click navigation/state to settle
+                    # Allow post-click state to settle
                     try:
-                        await detail_page.wait_for_load_state("load", timeout=8000)
+                        await detail_page.wait_for_load_state("domcontentloaded", timeout=6000)
                     except Exception:
                         pass
                     await _human_delay(2, 4)
@@ -480,11 +472,11 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             notes="Skipped: Contains custom screening questions",
                         ))
                         db.commit()
-                        await _human_delay(2, 4)
+                        await _human_delay(2, 3)
                         continue
 
                     # 5. Success verification
-                    await _human_delay(1, 3)
+                    await _human_delay(1, 2)
                     post_content = ""
                     post_url = ""
                     try:
@@ -571,7 +563,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         ))
                         db.commit()
 
-                        await _human_delay(6, 12)
+                        await _human_delay(5, 10)
 
                 except Exception as card_err:
                     print(f"[NAUKRI_BOT] Error inspecting card #{inspected_count}: {card_err}", flush=True)
