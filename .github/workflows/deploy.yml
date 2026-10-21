@@ -53,4 +53,4 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
           scp docker-compose.prod.yml "$USER_@$HOST:$DIR/docker-compose.prod.yml"
-          echo "$GH_TOKEN" | ssh "$USER_@$HOST" "set -e; docker login ghcr.io -u $ACTOR --password-stdin; cd $DIR; export OWNER=$OWNER TAG=$SHA; docker compose -f docker-compose.prod.yml pull; docker compose -f docker-compose.prod.yml up -d --remove-orphans; docker image prune -f"
+          echo "$GH_TOKEN" | ssh "$USER_@$HOST" "set -e; docker login ghcr.io -u $ACTOR --password-stdin; cd $DIR; export OWNER=$OWNER TAG=$SHA; docker compose -f docker-compose.prod.yml pull; docker compose -f docker-compose.prod.yml up -d --remove-orphans --force-recreate; docker image prune -f"
