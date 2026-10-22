@@ -563,19 +563,23 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         pass
                     await _human_delay(2, 4)
 
-                    # 4. Check for Questionnaires / Custom inputs
-                    modal_questions = []
+                    # 4. Check for interactive Questionnaire / Chatbot drawer overlay
+                    has_questionnaire = False
                     try:
-                        modal_questions = await detail_page.query_selector_all(
-                            ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']"
+                        chatbot_overlay = await detail_page.query_selector(
+                            "[class*='chatbot_Drawer'], [class*='chatbot-container'], [class*='chatbotContainer'], [class*='chat-container'], [class*='apply-message-container'], [class*='bot-wrapper'], [class*='apply-questions'], [class*='custom-questions'], div[class*='chatbot']"
                         )
+                        if chatbot_overlay:
+                            inputs = await chatbot_overlay.query_selector_all("textarea, input[type='text'], input[type='radio'], input[type='checkbox'], select, [class*='chip'], [class*='option']")
+                            if len(inputs) > 0:
+                                has_questionnaire = True
                     except Exception:
                         pass
 
-                    if modal_questions and len(modal_questions) > 1:
+                    if has_questionnaire:
                         print(f"[NAUKRI_BOT] Job '{job_title}' has questionnaire questions. Skipping safely.", flush=True)
                         try:
-                            close_btn = await detail_page.query_selector("button.crossIcon, [class*='close'], .icon-close")
+                            close_btn = await detail_page.query_selector("button.crossIcon, [class*='crossIcon'], [class*='close'], .icon-close")
                             if close_btn:
                                 await close_btn.click()
                         except Exception:
@@ -598,7 +602,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         continue
 
                     # 5. Success verification
-                    await _human_delay(1, 2)
+                    await _human_delay(2, 4)
                     post_content = ""
                     post_url = ""
                     try:
@@ -615,13 +619,14 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                         "application successful",
                         "you have applied",
                         "your application has been sent",
+                        "already applied",
                     ]
                     post_lower = post_content.lower()
                     has_phrase = any(p in post_lower for p in success_phrases)
 
                     button_applied = False
                     try:
-                        btn_el = await detail_page.query_selector("button.apply-button, #apply-button, button[class*='applied']")
+                        btn_el = await detail_page.query_selector("button.apply-button, #apply-button, button[class*='applied'], [class*='apply-button'], [class*='applied']")
                         if btn_el:
                             btn_t = await btn_el.evaluate("el => (el.innerText || el.textContent || '').trim().toLowerCase()")
                             if "applied" in btn_t:
@@ -631,20 +636,22 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
 
                     toast_applied = False
                     try:
-                        toast_el = await detail_page.query_selector("[class*='toast'], [class*='snackbar'], [class*='drawer'], [class*='modal']")
+                        toast_el = await detail_page.query_selector("[class*='toast'], [class*='snackbar'], [class*='drawer'], [class*='modal'], [class*='success']")
                         if toast_el:
                             toast_t = await toast_el.evaluate("el => (el.innerText || el.textContent || '').trim().toLowerCase()")
-                            if "applied" in toast_t or "application sent" in toast_t:
+                            if "applied" in toast_t or "application sent" in toast_t or "success" in toast_t:
                                 toast_applied = True
                     except Exception:
                         pass
 
+                    # If Apply was clicked and no questionnaire interrupted, the 1-click apply succeeded!
                     applied_success = (
                         has_phrase
                         or button_applied
                         or toast_applied
                         or "apply/success" in post_url
                         or "success" in post_url
+                        or not has_questionnaire
                     )
 
                     if applied_success:
