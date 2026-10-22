@@ -24,6 +24,7 @@ services:
   backend:
     image: ghcr.io/${OWNER:-subramaniyan-code}/jobtrack-backend:${TAG:-latest}
     restart: unless-stopped
+    init: true
     logging: *default-logging
     env_file: .env
     environment:

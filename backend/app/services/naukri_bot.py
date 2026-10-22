@@ -3,6 +3,7 @@ import json
 import logging
 import random
 import re
+import subprocess
 from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote_plus
@@ -38,6 +39,15 @@ async def _smooth_scroll(page):
     # Small scroll up
     await page.mouse.wheel(0, -random.randint(80, 200))
     await asyncio.sleep(random.uniform(0.6, 1.2))
+
+
+def _cleanup_orphan_chrome():
+    """Kill any zombie or orphaned Chrome processes to preserve low memory/CPU."""
+    try:
+        subprocess.run(["pkill", "-9", "-f", "chrome"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "-f", "chromium"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotConfig) -> dict[str, Any]:
@@ -150,6 +160,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
         locations = [loc.strip() for loc in (config.target_locations or "Chennai").split(",") if loc.strip()]
         primary_loc = locations[0] if locations else "Chennai"
         loc_slug = re.sub(r'[^a-zA-Z0-9]', '', primary_loc.lower())
+
+        _cleanup_orphan_chrome()
 
         async with async_playwright() as p:
             print("[NAUKRI_BOT] Launching stealth lightweight Chromium inside Docker...", flush=True)
@@ -736,6 +748,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
             except Exception:
                 pass
             print("[NAUKRI_BOT] Playwright Chromium browser closed. Memory freed.", flush=True)
+        _cleanup_orphan_chrome()
         if config.status == "running":
             config.status = "idle"
             db.commit()
