@@ -164,6 +164,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     "--disable-gpu",
                     "--renderer-process-limit=1",
                     "--js-flags=--max-old-space-size=256",
+                    "--blink-settings=imagesEnabled=false",
                     "--window-size=1440,900",
                     "--disable-extensions",
                     "--disable-background-networking",
@@ -391,59 +392,72 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     await _smooth_scroll(detail_page)
 
                     # Extract rich JD metadata: clean location, key skills chips, recruiter details
-                    detail_meta = await detail_page.evaluate("""() => {
-                        // 1. Precise location from detail page header
-                        let loc = '';
-                        const locCandidates = document.querySelectorAll('.styles_j-tuple-location__... span, .styles_j-tuple-location__..., .loc-wrap, [class*="location"]');
-                        for (const el of locCandidates) {
-                            const t = (el.innerText || el.textContent || '').trim();
-                            if (t && !t.toLowerCase().includes('yr') && !t.toLowerCase().includes('year') && !t.includes('₹') && !t.toLowerCase().includes('lacs') && !t.toLowerCase().includes('not disclosed')) {
-                                loc = t;
-                                break;
-                            }
-                        }
-
-                        // 2. Key skills tags
-                        const skillEls = document.querySelectorAll('[class*="key-skill"] a, [class*="key-skill"] span, [class*="chip"], a[href*="/tags/"], .styles_chip__...');
-                        const skillsSet = new Set();
-                        for (const el of skillEls) {
-                            const s = (el.innerText || el.textContent || '').trim();
-                            if (s && s.length >= 2 && s.length <= 40 && !s.toLowerCase().includes('suggested') && !s.toLowerCase().includes('key skill')) {
-                                skillsSet.add(s);
-                            }
-                        }
-
-                        // 3. Page body text for recruiter info / contacts
-                        const bodyText = document.body.innerText || '';
-                        if (skillsSet.size === 0) {
-                            const techKeywords = [
-                                'AWS', 'Azure', 'GCP', 'Terraform', 'Kubernetes', 'Docker', 'Ansible', 'CI/CD',
-                                'Python', 'Linux', 'Bash', 'Git', 'Jenkins', 'Prometheus', 'Grafana', 'OpenShift',
-                                'Helm', 'CloudFormation', 'Kafka', 'SRE', 'DevOps', 'IaC', 'Networking', 'Security'
-                            ];
-                            for (const kw of techKeywords) {
-                                const re = new RegExp('\\\\b' + kw + '\\\\b', 'i');
-                                if (re.test(bodyText)) {
-                                    skillsSet.add(kw);
+                    detail_meta = {}
+                    try:
+                        detail_meta = await detail_page.evaluate("""() => {
+                            // 1. Precise location from detail page header
+                            let loc = '';
+                            try {
+                                const locCandidates = document.querySelectorAll('[class*="styles_j-tuple-location"] span, [class*="styles_j-tuple-location"], .loc-wrap, [class*="locWdth"], [class*="location"]');
+                                for (const el of locCandidates) {
+                                    const t = (el.innerText || el.textContent || '').trim();
+                                    if (t && !t.toLowerCase().includes('yr') && !t.toLowerCase().includes('year') && !t.includes('₹') && !t.toLowerCase().includes('lacs') && !t.toLowerCase().includes('not disclosed')) {
+                                        loc = t;
+                                        break;
+                                    }
                                 }
-                            }
-                        }
+                            } catch (e) {}
 
-                        // 4. Contact email
-                        const emailMatch = bodyText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/);
-                        const email = emailMatch ? emailMatch[1] : null;
+                            // 2. Key skills tags
+                            const skillsSet = new Set();
+                            try {
+                                const skillEls = document.querySelectorAll('[class*="key-skill"] a, [class*="key-skill"] span, [class*="chip"], a[href*="/tags/"], [class*="styles_chip"]');
+                                for (const el of skillEls) {
+                                    const s = (el.innerText || el.textContent || '').trim();
+                                    if (s && s.length >= 2 && s.length <= 40 && !s.toLowerCase().includes('suggested') && !s.toLowerCase().includes('key skill')) {
+                                        skillsSet.add(s);
+                                    }
+                                }
+                            } catch (e) {}
 
-                        // 5. Contact phone / whatsapp
-                        const phoneMatch = bodyText.match(/(?:(?:\\+91|0)[-.\\s]?)?[6-9]\\d{9}\\b/);
-                        const phone = phoneMatch ? phoneMatch[0] : null;
+                            // 3. Page body text for recruiter info / contacts
+                            let email = null;
+                            let phone = null;
+                            try {
+                                const bodyText = document.body ? (document.body.innerText || '') : '';
+                                if (skillsSet.size === 0) {
+                                    const techKeywords = [
+                                        'AWS', 'Azure', 'GCP', 'Terraform', 'Kubernetes', 'Docker', 'Ansible', 'CI/CD',
+                                        'Python', 'Linux', 'Bash', 'Git', 'Jenkins', 'Prometheus', 'Grafana', 'OpenShift',
+                                        'Helm', 'CloudFormation', 'Kafka', 'SRE', 'DevOps', 'IaC', 'Networking', 'Security'
+                                    ];
+                                    for (const kw of techKeywords) {
+                                        const re = new RegExp('\\\\b' + kw + '\\\\b', 'i');
+                                        if (re.test(bodyText)) {
+                                            skillsSet.add(kw);
+                                        }
+                                    }
+                                }
 
-                        return {
-                            location: loc,
-                            keySkills: Array.from(skillsSet),
-                            email: email,
-                            phone: phone
-                        };
-                    }""")
+                                // 4. Contact email
+                                const emailMatch = bodyText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/);
+                                email = emailMatch ? emailMatch[1] : null;
+
+                                // 5. Contact phone / whatsapp
+                                const phoneMatch = bodyText.match(/(?:(?:\\+91|0)[-.\\s]?)?[6-9]\\d{9}\\b/);
+                                phone = phoneMatch ? phoneMatch[0] : null;
+                            } catch (e) {}
+
+                            return {
+                                location: loc,
+                                keySkills: Array.from(skillsSet),
+                                email: email,
+                                phone: phone
+                            };
+                        }""")
+                    except Exception as meta_err:
+                        print(f"[NAUKRI_BOT] Note: Metadata extraction skipped for '{job_title}': {meta_err}", flush=True)
+                        detail_meta = {}
 
                     if detail_meta.get("location"):
                         job_loc = detail_meta["location"]
@@ -541,7 +555,7 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     modal_questions = []
                     try:
                         modal_questions = await detail_page.query_selector_all(
-                            ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']:visible"
+                            ".chatbot-container, .apply-message, .apply-questions, form.custom-form, textarea, input[type='text']"
                         )
                     except Exception:
                         pass
@@ -603,9 +617,20 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                     except Exception:
                         pass
 
+                    toast_applied = False
+                    try:
+                        toast_el = await detail_page.query_selector("[class*='toast'], [class*='snackbar'], [class*='drawer'], [class*='modal']")
+                        if toast_el:
+                            toast_t = await toast_el.evaluate("el => (el.innerText || el.textContent || '').trim().toLowerCase()")
+                            if "applied" in toast_t or "application sent" in toast_t:
+                                toast_applied = True
+                    except Exception:
+                        pass
+
                     applied_success = (
                         has_phrase
                         or button_applied
+                        or toast_applied
                         or "apply/success" in post_url
                         or "success" in post_url
                     )
@@ -676,6 +701,8 @@ async def run_naukri_auto_apply_session(db: Session, config: models.NaukriBotCon
                             await detail_page.close()
                         except Exception:
                             pass
+                    # Throttle between tabs so VPS CPU stays cool
+                    await asyncio.sleep(2)
 
             # Update final session state
             config.last_run_at = datetime.utcnow()
