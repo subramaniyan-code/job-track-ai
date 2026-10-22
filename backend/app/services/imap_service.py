@@ -14,7 +14,8 @@ import imaplib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import html
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from typing import Optional
@@ -25,7 +26,7 @@ from ..security import decrypt_str
 
 log = logging.getLogger("imap")
 
-MAX_BODY_CHARS = 4000
+MAX_BODY_CHARS = 20000
 
 # Senders/subject keywords that usually mean "this is job-related" — used to
 # skip everything else cheaply, before any AI call is made (AI calls cost
@@ -76,6 +77,21 @@ def _looks_job_related(sender: str, subject: str) -> bool:
     return any(h in s for h in JOB_SENDER_HINTS) or any(h in subj for h in JOB_SUBJECT_HINTS)
 
 
+def _clean_html_text(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    # Convert line breaks and paragraph/block closures to real newlines
+    text = re.sub(r"(?i)<br\s*/?>", "\n", raw_html)
+    text = re.sub(r"(?i)</(?:p|div|tr|li|h[1-6]|table|blockquote)>", "\n", text)
+    # Strip remaining HTML tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    # Clean up whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+    return text.strip()
+
+
 def _extract_body(msg: email.message.Message) -> str:
     if msg.is_multipart():
         for part in msg.walk():
@@ -94,8 +110,7 @@ def _extract_body(msg: email.message.Message) -> str:
                     payload = part.get_payload(decode=True)
                     if payload:
                         raw_html = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-                        clean = re.sub(r"<[^>]+>", " ", raw_html)
-                        clean = re.sub(r"\s+", " ", clean).strip()
+                        clean = _clean_html_text(raw_html)
                         if clean:
                             return clean
                 except Exception:
@@ -107,8 +122,7 @@ def _extract_body(msg: email.message.Message) -> str:
             if payload:
                 txt = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
                 if msg.get_content_type() == "text/html":
-                    txt = re.sub(r"<[^>]+>", " ", txt)
-                    txt = re.sub(r"\s+", " ", txt).strip()
+                    txt = _clean_html_text(txt)
                 return txt
             return str(msg.get_payload() or "")
         except Exception:
@@ -216,7 +230,14 @@ def fetch_new_job_emails(
             body = _extract_body(full_msg)[:MAX_BODY_CHARS]
             date_hdr = msg_hdr.get("Date") or full_msg.get("Date")
             try:
-                received_at = parsedate_to_datetime(date_hdr) if date_hdr else None
+                if date_hdr:
+                    dt = parsedate_to_datetime(date_hdr)
+                    if dt and dt.tzinfo is not None:
+                        received_at = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                    else:
+                        received_at = dt
+                else:
+                    received_at = None
             except Exception:
                 received_at = None
 

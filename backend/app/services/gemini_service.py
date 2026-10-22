@@ -130,7 +130,7 @@ async def classify_email(from_address: str, subject: str, body: str) -> Optional
     if not settings.google_ai_api_key:
         return _heuristic_classify(from_address, subject, body)
 
-    prompt = CLASSIFY_PROMPT.format(from_address=from_address, subject=subject, body=body)
+    prompt = CLASSIFY_PROMPT.format(from_address=from_address, subject=subject, body=body[:3000])
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{settings.google_ai_model}:generateContent?key={settings.google_ai_api_key}"

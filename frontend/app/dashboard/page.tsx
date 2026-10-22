@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers, AlertTriangle, RefreshCw } from "lucide-react";
+import { BarChart2, Send, MessageSquare, Award, XCircle, Clock, TrendingUp, Mail, Sparkles, Plus, Layers, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Calendar, Copy, Check, User, FileText } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -19,6 +19,25 @@ const INSIGHT_LABELS: Record<string, string> = {
   other: "Update",
 };
 
+
+function formatIST(isoDate?: string | null) {
+  if (!isoDate) return "—";
+  const safeIso = isoDate.includes("Z") || /[+-]\d{2}:\d{2}$/.test(isoDate) ? isoDate : `${isoDate}Z`;
+  try {
+    return new Date(safeIso).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return isoDate;
+  }
+}
+
 const INSIGHT_TONES: Record<string, string> = {
   application_confirmation: "bg-blue-50 text-blue-700",
   interview_invite: "bg-amber-50 text-amber-700",
@@ -29,6 +48,8 @@ const INSIGHT_TONES: Record<string, string> = {
 };
 
 function InboxCard({ insight, onRead }: { insight: EmailInsight; onRead: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [trackedUrls, setTrackedUrls] = useState<Set<string>>(new Set());
 
   async function trackExtracted(job: { title: string; company?: string; url?: string }) {
@@ -41,46 +62,239 @@ function InboxCard({ insight, onRead }: { insight: EmailInsight; onRead: (id: st
     setTrackedUrls((prev) => new Set(prev).add(job.url || job.title));
   }
 
+  const receivedTimeStr = formatIST(insight.received_at || insight.created_at);
+
   return (
-    <div className={`card p-4 ${!insight.is_read ? "border-brand-200" : ""}`}>
+    <div className={`card transition-all ${expanded ? "ring-2 ring-brand-500/20 shadow-md p-5 bg-white" : "p-4 hover:border-slate-300"} ${!insight.is_read ? "border-brand-200 bg-brand-50/20" : ""}`}>
+      {/* Header Row */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`badge ${INSIGHT_TONES[insight.insight_type]}`}>{INSIGHT_LABELS[insight.insight_type]}</span>
-            {!insight.is_read && <span className="h-1.5 w-1.5 rounded-full bg-brand-500" />}
-          </div>
-          <p className="text-sm font-medium truncate">{insight.job_title || insight.subject || "Email update"}</p>
-          {insight.company && <p className="text-xs text-slate-500">{insight.company}</p>}
-          {insight.summary && <p className="text-xs text-slate-500 mt-1">{insight.summary}</p>}
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            <span className={`badge ${INSIGHT_TONES[insight.insight_type] || "bg-slate-100 text-slate-700"}`}>
+              {INSIGHT_LABELS[insight.insight_type] || "Email Update"}
+            </span>
 
-          {insight.insight_type === "job_alert" && insight.extracted_jobs && insight.extracted_jobs.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {insight.extracted_jobs.slice(0, 5).map((job, i) => {
-                const key = job.url || job.title;
-                const tracked = trackedUrls.has(key);
-                return (
-                  <div key={i} className="flex items-center justify-between gap-2 bg-slate-50 rounded-lg px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium truncate">{job.title}</p>
-                      {job.company && <p className="text-[11px] text-slate-400 truncate">{job.company}</p>}
-                    </div>
-                    <button
-                      onClick={() => trackExtracted(job)}
-                      disabled={tracked}
-                      className="btn btn-secondary text-[11px] py-1 px-2 shrink-0"
-                    >
-                      <Plus size={12} /> {tracked ? "Added" : "Track"}
-                    </button>
-                  </div>
-                );
-              })}
+            {/* Received Date & Time Pill */}
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200/60" title={`Received at: ${receivedTimeStr} (IST)`}>
+              <Clock size={11} className="text-slate-400" />
+              <span>{receivedTimeStr}</span>
+            </span>
+
+            {insight.platform && (
+              <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/60">
+                {insight.platform}
+              </span>
+            )}
+
+            {!insight.is_read && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-brand-600 bg-brand-100/70 px-1.5 py-0.5 rounded-full">
+                <span className="h-1.5 w-1.5 rounded-full bg-brand-600 animate-pulse" /> New
+              </span>
+            )}
+          </div>
+
+          <h3 className="text-sm font-semibold text-slate-900 leading-snug">
+            {insight.job_title || insight.subject || "Email Notification"}
+          </h3>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-slate-500">
+            {insight.company && (
+              <span className="font-medium text-slate-700">{insight.company}</span>
+            )}
+            {insight.from_address && (
+              <span className="text-slate-400 truncate max-w-xs font-mono text-[11px]">
+                from: {insight.from_address}
+              </span>
+            )}
+          </div>
+
+          {!expanded && insight.summary && (
+            <p className="text-xs text-slate-600 mt-1.5 line-clamp-2 leading-relaxed">
+              {insight.summary}
+            </p>
+          )}
+
+          {/* Quick preview of jobs for alerts when collapsed */}
+          {!expanded && insight.insight_type === "job_alert" && insight.extracted_jobs && insight.extracted_jobs.length > 0 && (
+            <div className="mt-2.5 flex items-center gap-2 text-xs text-slate-500">
+              <span className="font-medium text-brand-600">
+                {insight.extracted_jobs.length} jobs detected in alert
+              </span>
+              <span>·</span>
+              <button
+                onClick={() => setExpanded(true)}
+                className="text-brand-600 hover:underline font-medium text-xs inline-flex items-center gap-0.5"
+              >
+                View all & track <ChevronDown size={12} />
+              </button>
             </div>
           )}
         </div>
-        {!insight.is_read && (
-          <button onClick={() => onRead(insight.id)} className="btn-ghost text-xs shrink-0">Mark read</button>
-        )}
+
+        {/* Action Controls */}
+        <div className="flex items-center gap-2 shrink-0">
+          {!insight.is_read && (
+            <button
+              onClick={() => onRead(insight.id)}
+              className="btn-ghost text-xs text-slate-500 hover:text-brand-600 py-1 px-2 shrink-0 hidden sm:inline-block"
+              title="Mark as read"
+            >
+              Mark read
+            </button>
+          )}
+
+          {/* Dropdown Toggle Button */}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all ${
+              expanded
+                ? "bg-brand-600 text-white border-brand-600 shadow-sm"
+                : "bg-white text-slate-700 hover:text-brand-600 hover:bg-slate-50 border-slate-200"
+            }`}
+            title={expanded ? "Collapse email view" : "Open dropdown to read full email content"}
+          >
+            <Mail size={13} className={expanded ? "text-white" : "text-brand-600"} />
+            <span className="hidden xs:inline">{expanded ? "Close Email" : "Read Email"}</span>
+            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        </div>
       </div>
+
+      {/* Expanded Dropdown: Full Email Reader & Details */}
+      {expanded && (
+        <div className="mt-4 pt-4 border-t border-slate-200/80 space-y-3.5 animate-in fade-in duration-150">
+          {/* Metadata Card */}
+          <div className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-3.5 text-xs space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pb-2.5 border-b border-slate-200/60">
+              <div className="flex items-center gap-1.5 text-slate-700">
+                <Calendar size={13} className="text-brand-600 shrink-0" />
+                <span className="font-semibold text-slate-500">Received Date & Time:</span>
+                <span className="font-medium text-slate-900">{receivedTimeStr} (IST)</span>
+              </div>
+
+              {insight.from_address && (
+                <div className="flex items-center gap-1.5 text-slate-700 min-w-0">
+                  <User size={13} className="text-brand-600 shrink-0" />
+                  <span className="font-semibold text-slate-500">From:</span>
+                  <span className="font-mono text-slate-900 truncate bg-white px-2 py-0.5 rounded border border-slate-200 text-[11px]" title={insight.from_address}>
+                    {insight.from_address}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-start gap-1.5 text-slate-700">
+              <Mail size={13} className="text-brand-600 mt-0.5 shrink-0" />
+              <div>
+                <span className="font-semibold text-slate-500 mr-1.5">Subject:</span>
+                <span className="font-medium text-slate-900">{insight.subject || "No Subject"}</span>
+              </div>
+            </div>
+
+            {insight.summary && (
+              <div className="flex items-start gap-1.5 bg-amber-50/70 border border-amber-200/60 rounded-lg p-2.5 text-slate-700">
+                <Sparkles size={13} className="text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold text-amber-800 mr-1">AI Classification Summary:</span>
+                  <span className="text-amber-950">{insight.summary}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Full Email Message Box */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5 px-0.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                <FileText size={13} className="text-brand-600" />
+                <span>Full Email Content</span>
+              </div>
+              {insight.body && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(insight.body || "");
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-md transition-colors"
+                  title="Copy full email text to clipboard"
+                >
+                  {copied ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                  <span>{copied ? "Copied to clipboard!" : "Copy Full Text"}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 font-sans text-xs text-slate-800 leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto select-text shadow-inner">
+              {insight.body ? (
+                insight.body
+              ) : (
+                <div className="text-slate-500 py-3 space-y-2">
+                  <p className="font-medium text-slate-700">
+                    {insight.summary || "Full message content was not cached for this earlier email."}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    💡 Click <strong>"Sync inbox now"</strong> at the top of the Inbox Activity section to fetch and cache full email bodies for your recent emails.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Extracted Jobs (for job_alert) */}
+          {insight.insight_type === "job_alert" && insight.extracted_jobs && insight.extracted_jobs.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-200/80">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-800">
+                  Discovered Job Postings in this Alert ({insight.extracted_jobs.length}):
+                </span>
+              </div>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {insight.extracted_jobs.map((job, i) => {
+                  const key = job.url || job.title;
+                  const tracked = trackedUrls.has(key);
+                  return (
+                    <div key={i} className="flex items-center justify-between gap-2 bg-slate-50/80 hover:bg-slate-100/80 rounded-lg px-3 py-2 border border-slate-200 transition-colors">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-slate-900 truncate">{job.title}</p>
+                        {job.company && <p className="text-[11px] text-slate-500 truncate">{job.company}</p>}
+                      </div>
+                      <button
+                        onClick={() => trackExtracted(job)}
+                        disabled={tracked}
+                        className="btn btn-secondary text-[11px] py-1 px-2.5 shrink-0"
+                      >
+                        <Plus size={12} /> {tracked ? "Added to Applications" : "Track Job"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Footer controls */}
+          <div className="flex items-center justify-between pt-2">
+            {!insight.is_read ? (
+              <button
+                onClick={() => onRead(insight.id)}
+                className="text-xs text-brand-600 hover:text-brand-700 font-medium hover:underline flex items-center gap-1"
+              >
+                ✓ Mark as read
+              </button>
+            ) : (
+              <span className="text-[11px] text-slate-400">✓ Read</span>
+            )}
+
+            <button
+              onClick={() => setExpanded(false)}
+              className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800 py-1 px-2.5 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              <ChevronUp size={13} /> Collapse Email
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -87,6 +87,7 @@ class EmailInsightOut(BaseModel):
     from_address: Optional[str]
     subject: Optional[str]
     received_at: Optional[datetime]
+    body: Optional[str] = None
     insight_type: EmailInsightType
     company: Optional[str]
     job_title: Optional[str]

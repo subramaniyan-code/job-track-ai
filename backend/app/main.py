@@ -36,6 +36,7 @@ def run_migrations():
             conn.execute(text("ALTER TABLE naukri_bot_logs ADD COLUMN IF NOT EXISTS key_skills TEXT;"))
             conn.execute(text("ALTER TABLE naukri_bot_logs ADD COLUMN IF NOT EXISTS recruiter_email VARCHAR;"))
             conn.execute(text("ALTER TABLE naukri_bot_logs ADD COLUMN IF NOT EXISTS recruiter_phone VARCHAR;"))
+            conn.execute(text("ALTER TABLE email_insights ADD COLUMN IF NOT EXISTS body TEXT;"))
             # Auto-reset any orphaned running states on startup
             conn.execute(text("UPDATE naukri_bot_configs SET status = 'idle' WHERE status = 'running';"))
     except Exception:

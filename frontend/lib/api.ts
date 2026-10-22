@@ -240,6 +240,7 @@ export interface EmailInsight {
   from_address: string | null;
   subject: string | null;
   received_at: string | null;
+  body?: string | null;
   insight_type: EmailInsightType;
   company: string | null;
   job_title: string | null;

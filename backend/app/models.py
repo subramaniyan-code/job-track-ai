@@ -123,6 +123,7 @@ class EmailInsight(Base):
     from_address = Column(String, nullable=True)
     subject = Column(String, nullable=True)
     received_at = Column(DateTime, nullable=True)
+    body = Column(Text, nullable=True)
 
     insight_type = Column(Enum(EmailInsightType), default=EmailInsightType.other, nullable=False)
     company = Column(String, nullable=True)

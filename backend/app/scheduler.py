@@ -203,6 +203,9 @@ async def poll_one_account(db, account: models.EmailAccount, force_backfill: boo
             models.EmailInsight.message_id == msg.message_id,
         ).first()
         if exists:
+            if not exists.body and msg.body:
+                exists.body = msg.body
+                db.commit()
             continue
 
         classification = await classify_email(msg.from_address, msg.subject, msg.body)
@@ -231,6 +234,7 @@ async def poll_one_account(db, account: models.EmailAccount, force_backfill: boo
             from_address=msg.from_address,
             subject=msg.subject,
             received_at=msg.received_at,
+            body=msg.body,
             insight_type=classification.type,
             company=classification.company,
             job_title=classification.job_title,
